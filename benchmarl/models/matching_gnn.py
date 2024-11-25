@@ -24,6 +24,24 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
+def generate_graph(batch_size, node_features, node_pos, edge_attr, n_agents, device, bc=1):
+    b = torch.arange(batch_size * bc, device=device)
+    graphs = torch_geometric.data.Batch()
+    graphs.ptr = torch.arange(0, (batch_size * bc + 1) * n_agents, n_agents)
+    graphs.batch = torch.repeat_interleave(b, n_agents)
+
+    graphs.x = node_features
+    graphs.pos = node_pos
+    graphs.edge_attr = edge_attr
+    graphs.edge_index = torch_geometric.nn.pool.radius_graph(
+        graphs.pos, batch=graphs.batch, r=1, loop=True
+    )
+    graphs = torch_geometric.transforms.Cartesian(norm=False)(graphs)
+    graphs = torch_geometric.transforms.Distance(norm=False)(graphs)
+
+    return graphs
+
+
 class Encoder(nn.Module):
     """Encoder for initial state of DGN"""
 
@@ -55,64 +73,15 @@ class MatchingGNN(Model):
             action_spec=kwargs.pop("action_spec"),
             model_index=kwargs.pop("model_index"),
             is_critic=kwargs.pop("is_critic"),
-
         )
 
         self.input_features = sum(
             [spec.shape[-1] for spec in self.input_spec.values(True, True)]
         )
 
-        # And access some of the ones already available to your module
-        _ = self.input_spec  # Like its input_spec
-        _ = self.output_spec  # or output_spec
-        _ = self.action_spec  # the action spec of the env
-        _ = self.agent_group  # the name of the agent group the model is for
-        _ = self.n_agents  # or the number of agents this module is for
-        _ = self.input_has_agent_dim
-        _ = self.share_params
-        _ = self.centralised
-        _ = self.output_has_agent_dim
-
         self.output_features = self.output_leaf_spec.shape[-1]
 
         self.activation_function = activation_class
-
-        # Define CompositeSpecs for the landmark gnn
-        landmark_position_spec = Composite(
-            {
-                "nodes": Composite(
-                    {"node_pos": Unbounded(shape=(self.n_agents, 2))},
-                    shape=(self.n_agents,),
-                )
-            }
-        )
-
-        # Define CompositeSpecs for the agents gnn
-        agents_input_spec = Composite(
-            {
-                "agents": Composite(
-                    {"agent_pos": Unbounded(shape=(self.n_agents, 2)),
-                     "agent_vel": Unbounded(shape=(self.n_agents, 2)),
-                     "relative_landmark_pos": Unbounded(shape=(self.n_agents, self.n_agents * 3)),
-                     "similarity": Unbounded(shape=(self.n_agents, 1))},
-                    shape=(self.n_agents,),
-                )
-            }
-        )
-
-        positional_output_spec = Composite(
-            {
-                "graph_latent_rep": Unbounded(shape=(self.n_agents, 8))
-            }
-        )
-
-        agent_gnn_output_spec = Composite(
-            {
-                "graph_latent_rep": Unbounded(shape=(self.n_agents, 32))
-            }
-        )
-
-        matching_input_spec = self.n_agents * 8
 
         self.node_pos_encoder = Encoder(2, 8).to(self.device)
         self.edge_encoder = Encoder(2, 8).to(self.device)
@@ -120,62 +89,6 @@ class MatchingGNN(Model):
         self.agent_gnn = GATv2Conv(128, 128, 1, edge_dim=3).to(self.device)
         self.Final_encoder = Encoder(128, 9).to(self.device)
 
-        # if self.input_has_agent_dim and not self.centralised:
-        # self.matching_gnn = Gnn_v2(
-        #     topology="from_pos",
-        #     self_loops=False,
-        #     gnn_class=torch_geometric.nn.conv.GATv2Conv,
-        #     gnn_kwargs={"aggr": "add"},
-        #     position_key="node_pos",
-        #     pos_features=2,
-        #     velocity_key=None,
-        #     vel_features=0,
-        #     exclude_pos_from_node_features=False,
-        #     edge_radius=0.5,
-        #
-        #     input_spec=landmark_position_spec,
-        #     output_spec=positional_output_spec,
-        #     agent_group="nodes",
-        #     input_has_agent_dim=self.input_has_agent_dim,
-        #     n_agents=self.n_agents,
-        #     centralised=self.centralised,
-        #     share_params=True,
-        #     device=self.device,
-        #     action_spec=self.action_spec,
-        #     model_index=self.model_index,
-        #     is_critic=self.is_critic,
-        # )
-        #
-        # self.gnn_agents = Gnn(
-        #     topology="from_pos",
-        #     self_loops=False,
-        #     gnn_class=torch_geometric.nn.conv.GATv2Conv,
-        #     gnn_kwargs={"aggr": "add"},
-        #     position_key="agent_pos",
-        #     pos_features=2,
-        #     velocity_key="agent_vel",
-        #     vel_features=2,
-        #     exclude_pos_from_node_features=False,
-        #     edge_radius=0.5,
-        #
-        #     input_spec=agents_input_spec,
-        #     output_spec=agent_gnn_output_spec,
-        #     agent_group="agents",
-        #     input_has_agent_dim=self.input_has_agent_dim,
-        #     n_agents=self.n_agents,
-        #     centralised=self.centralised,
-        #     share_params=self.share_params,
-        #     device=self.device,
-        #     action_spec=self.action_spec,
-        #     model_index=self.model_index,
-        #     is_critic=self.is_critic,
-        # )
-        #
-        # self.graph_embedding_mlp = MLP(in_features=matching_input_spec,
-        #                                out_features=32,
-        #                                depth=2,
-        #                                device=self.device)
-        #
         self.final_mlp = MultiAgentMLP(
             n_agent_inputs=128,
             n_agent_outputs=self.output_features,
@@ -190,33 +103,9 @@ class MatchingGNN(Model):
         super()._perform_checks()
 
     def _forward(self, tensordict: TensorDictBase) -> TensorDictBase:
-
-        matching_input_dict = Composite(
-            {
-                "nodes": Composite(
-                    {"node_pos": Unbounded(shape=(self.n_agents, 2))},
-                    shape=[],
-                )
-            }
-        )
-
-        agents_input_dict = Composite(
-            {
-                "agents": Composite(
-                    {
-                        "agent_pos": Unbounded(shape=(self.n_agents, 2)),
-                        "agent_vel": Unbounded(shape=(self.n_agents, 2)),
-                        "relative_landmark_pos": Unbounded(shape=(self.n_agents, self.n_agents * 3)),
-                        "similarity": Unbounded(shape=(self.n_agents, 1))},
-                    shape=[],
-                )
-            }
-        )
-
         # Input has multi-agent input dimension
         if self.input_has_agent_dim:
-
-            # create the agnet - objective graph
+            # create the agent - objective graph
             batch_size = tensordict.get("agents")["observation"]["agent_pos"].shape[:-2][0]
 
             landmark_positions = tensordict.get("agents")["observation"]["landmark_pos"]
@@ -227,20 +116,7 @@ class MatchingGNN(Model):
 
             node_features = torch.cat([landmark_positions, landmark_eaten], dim=1)
 
-            landmark_positions_ecoding = self.node_pos_encoder(landmark_positions).view(-1, 8)
-            b = torch.arange(batch_size * self.n_agents, device=self.device)
-            graphs = torch_geometric.data.Batch()
-            graphs.ptr = torch.arange(0, (batch_size * self.n_agents + 1) * (self.n_agents+1), self.n_agents+1)
-            graphs.batch = torch.repeat_interleave(b, self.n_agents + 1)
-
-            graphs.x = node_features
-            graphs.pos = landmark_positions
-            graphs.edge_attr = None
-            graphs.edge_index = torch_geometric.nn.pool.radius_graph(
-                graphs.pos, batch=graphs.batch, r=1, loop=True
-            )
-            graphs = torch_geometric.transforms.Cartesian(norm=False)(graphs)
-            graphs = torch_geometric.transforms.Distance(norm=False)(graphs)
+            graphs = generate_graph(batch_size, node_features, landmark_positions, None, self.n_agents + 1, self.device, bc=self.n_agents)
 
             h1 = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
             # get the agents observation
@@ -248,54 +124,13 @@ class MatchingGNN(Model):
 
             # create the agent - agent graph
             agent_positions = tensordict.get("agents")["observation"]["agent_pos"]
-            # matching_input_dict.get("nodes").set("node_pos", agent_positions)
-            # agent_pos_graph_rep = self.matching_gnn.forward(matching_input_dict).get("graph_latent_rep").reshape(
-            #     batch_size, -1).unsqueeze(1).expand(-1, 4, -1)
-            b = torch.arange(batch_size, device=self.device)
-            graphs = torch_geometric.data.Batch()
-            graphs.ptr = torch.arange(0, (batch_size + 1) * self.n_agents, self.n_agents)
-            graphs.batch = torch.repeat_interleave(b, self.n_agents)
-            graphs.x = agent_objective_embedding_post_gnn
-            graphs.pos = agent_positions.view(-1, 2)
-            graphs.edge_attr = None
-            graphs.edge_index = torch_geometric.nn.pool.radius_graph(
-                graphs.pos, batch=graphs.batch, r=1, loop=True
-            )
-            graphs = torch_geometric.transforms.Cartesian(norm=False)(graphs)
-            graphs = torch_geometric.transforms.Distance(norm=False)(graphs)
+
+            graphs = generate_graph(batch_size, agent_objective_embedding_post_gnn, agent_positions.view(-1, 2), None,
+                                    self.n_agents, self.device)
+
             h2 = F.relu(self.agent_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
 
-            # objective_graph_embedding = self.graph_embedding_mlp.forward(objective_pos_graph_rep)
-            # agent_graph_embedding = self.graph_embedding_mlp.forward(agent_pos_graph_rep)
-            #
-            # cos = nn.CosineSimilarity(dim=2, eps=1e-6)
-            #
-            # similarity = cos(objective_graph_embedding, agent_graph_embedding).reshape(batch_size, -1, 1)
-            #
-            # agents_input_dict.get("agents").set("agent_pos", tensordict.get("agents")["observation"]["agent_pos"])
-            # agents_input_dict.get("agents").set("agent_vel", tensordict.get("agents")["observation"]["agent_vel"])
-            # agents_input_dict.get("agents").set("relative_landmark_pos",
-            #                                     tensordict.get("agents")["observation"]["relative_landmark_pos"])
-            # agents_input_dict.get("agents").set("similarity", similarity)
-            #
-            # res = self.gnn_agents.forward(agents_input_dict).get("graph_latent_rep")
-
-            # for key, value in res.items():
-            #     if key == ("agents", "action_value"):
-            #         res = value
-
-            # final_layer_input = torch.cat([objective_graph_embedding, agent_graph_embedding, similarity, res], dim=2)
             res = self.final_mlp.forward(h2.view(batch_size, self.n_agents, -1))
-
-        # Input does not have multi-agent input dimension
-        else:
-            if not self.share_params:
-                res = torch.stack(
-                    [net(input) for net in self.mlp],
-                    dim=-2,
-                )
-            else:
-                res = self.mlp[0](input)
 
         tensordict.set(self.out_key, res)
         return tensordict
