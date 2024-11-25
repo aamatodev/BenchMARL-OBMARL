@@ -54,7 +54,7 @@ class Encoder(nn.Module):
         return embedding
 
 
-class MatchingGNN(Model):
+class AgentObjectiveGNN(Model):
     def __init__(
             self,
             activation_class: Type[nn.Module],
@@ -116,9 +116,10 @@ class MatchingGNN(Model):
 
             node_features = torch.cat([landmark_positions, landmark_eaten], dim=1)
 
+            # Agent-Objective graph representation
             graphs = generate_graph(batch_size, node_features, landmark_positions, None, self.n_agents + 1, self.device, bc=self.n_agents)
-
             h1 = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
+
             # get the agents observation
             agent_objective_embedding_post_gnn = h1[0::5]
 
@@ -128,6 +129,7 @@ class MatchingGNN(Model):
             graphs = generate_graph(batch_size, agent_objective_embedding_post_gnn, agent_positions.view(-1, 2), None,
                                     self.n_agents, self.device)
 
+            # Agent-Agent graph representation
             h2 = F.relu(self.agent_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
 
             res = self.final_mlp.forward(h2.view(batch_size, self.n_agents, -1))
@@ -137,11 +139,11 @@ class MatchingGNN(Model):
 
 
 @dataclass
-class MatchingGNNConfig(ModelConfig):
+class AgentObjectiveGNNConfig(ModelConfig):
     # The config parameters for this class, these will be loaded from yaml
     activation_class: Type[nn.Module] = MISSING
 
     @staticmethod
     def associated_class():
         # The associated algorithm class
-        return MatchingGNN
+        return AgentObjectiveGNN
