@@ -24,7 +24,7 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
-def generate_graph(batch_size, node_features, node_pos, edge_attr, n_agents, device, bc=1):
+def generate_graph(batch_size, node_features, node_pos, edge_attr, n_agents, device, use_radius=False, bc=1):
     b = torch.arange(batch_size * bc, device=device)
     graphs = torch_geometric.data.Batch()
     graphs.ptr = torch.arange(0, (batch_size * bc + 1) * n_agents, n_agents)
@@ -33,9 +33,26 @@ def generate_graph(batch_size, node_features, node_pos, edge_attr, n_agents, dev
     graphs.x = node_features
     graphs.pos = node_pos
     graphs.edge_attr = edge_attr
-    graphs.edge_index = torch_geometric.nn.pool.radius_graph(
-        graphs.pos, batch=graphs.batch, r=1, loop=True
-    )
+
+    if use_radius:
+        graphs.edge_index = torch_geometric.nn.pool.radius_graph(
+            graphs.pos, batch=graphs.batch, r=0.5, loop=True
+        )
+    else:
+        adjacency = torch.ones(n_agents, n_agents, device=device, dtype=torch.long)
+        edge_index, _ = torch_geometric.utils.dense_to_sparse(adjacency)
+        # remove self loops
+        graphs.edge_index, _ = torch_geometric.utils.remove_self_loops(edge_index)
+        n_edges = edge_index.shape[1]
+        # Tensor of shape [batch_size * n_edges]
+        # in which edges corresponding to the same graph have the same index.
+        batch = torch.repeat_interleave(b, n_edges)
+        # Edge index for the batched graphs of shape [2, n_edges * batch_size]
+        # we sum to each batch an offset of batch_num * n_agents to make sure that
+        # the adjacency matrices remain independent
+        batch_edge_index = edge_index.repeat(1, batch_size * bc) + batch * n_agents
+        graphs.edge_index = batch_edge_index
+
     graphs = torch_geometric.transforms.Cartesian(norm=False)(graphs)
     graphs = torch_geometric.transforms.Distance(norm=False)(graphs)
 
@@ -117,7 +134,8 @@ class AgentObjectiveGNN(Model):
             node_features = torch.cat([landmark_positions, landmark_eaten], dim=1)
 
             # Agent-Objective graph representation
-            graphs = generate_graph(batch_size, node_features, landmark_positions, None, self.n_agents + 1, self.device, bc=self.n_agents)
+            graphs = generate_graph(batch_size, node_features, landmark_positions, None, self.n_agents + 1, self.device,
+                                    bc=self.n_agents)
             h1 = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
 
             # get the agents observation
@@ -127,7 +145,7 @@ class AgentObjectiveGNN(Model):
             agent_positions = tensordict.get("agents")["observation"]["agent_pos"]
 
             graphs = generate_graph(batch_size, agent_objective_embedding_post_gnn, agent_positions.view(-1, 2), None,
-                                    self.n_agents, self.device)
+                                    self.n_agents, self.device, use_radius=True)
 
             # Agent-Agent graph representation
             h2 = F.relu(self.agent_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
