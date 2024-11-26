@@ -59,7 +59,6 @@ def generate_graph(batch_size, node_features, node_pos, edge_attr, n_agents, dev
     return graphs
 
 
-
 class Encoder(nn.Module):
     """Encoder for initial state of DGN"""
 
@@ -104,11 +103,10 @@ class ObjectiveMatchingGNN(Model):
         self.node_pos_encoder = Encoder(2, 8).to(self.device)
         self.edge_encoder = Encoder(2, 8).to(self.device)
         self.matching_gnn = GATv2Conv(2, 128, 1, edge_dim=3).to(self.device)
-        self.agent_gnn = GATv2Conv(128, 128, 1, edge_dim=3).to(self.device)
-        self.Final_encoder = Encoder(128, 9).to(self.device)
+        self.agent_gnn = GATv2Conv(269, 128, 1, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=269,
+            n_agent_inputs=128,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -145,13 +143,14 @@ class ObjectiveMatchingGNN(Model):
             # node_features = torch.cat([landmark_positions, landmark_eaten], dim=1)
 
             # Objective graph representation
-            graphs = generate_graph(batch_size, landmark_positions, landmark_positions, None, self.n_agents, self.device)
+            graphs = generate_graph(batch_size, landmark_positions, landmark_positions, None, self.n_agents,
+                                    self.device)
             h1 = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
 
             # create the agent - agent graph
             agent_positions = tensordict.get("agents")["observation"]["agent_pos"]
 
-            graphs = generate_graph(batch_size,  agent_positions.view(-1, 2), agent_positions.view(-1, 2), None,
+            graphs = generate_graph(batch_size, agent_positions.view(-1, 2), agent_positions.view(-1, 2), None,
                                     self.n_agents, self.device)
             # Agent-Agent graph representation
             h2 = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
@@ -166,7 +165,11 @@ class ObjectiveMatchingGNN(Model):
                                          agent_objective_similarity.reshape(batch_size, self.n_agents, -1),
                                          tensordict.get("agents")["observation"]["relative_landmark_pos"]], dim=2)
 
-            res = self.final_mlp.forward(agent_final_obs)
+            graphs = generate_graph(batch_size, agent_final_obs.view(-1, 269), agent_positions.view(-1, 2), None,
+                                    self.n_agents, self.device, use_radius=True, bc=1)
+            h3 = F.relu(self.agent_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
+
+            res = F.relu(self.final_mlp.forward(h3.reshape(batch_size, self.n_agents, -1)))
 
         tensordict.set(self.out_key, res)
         return tensordict
