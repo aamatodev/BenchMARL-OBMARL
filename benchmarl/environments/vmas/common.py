@@ -43,6 +43,7 @@ class VmasTask(Task):
     SIMPLE_REFERENCE = None
     SIMPLE_SPEAKER_LISTENER = None
     SIMPLE_SPREAD = None
+    SIMPLE_SPREAD_GRAPH = None
     SIMPLE_TAG = None
     SIMPLE_WORLD_COMM = None
 

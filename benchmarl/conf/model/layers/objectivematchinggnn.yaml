@@ -1,3 +1,0 @@
-name: agentobjectivegnn
-
-activation_class: torch.nn.Tanh
