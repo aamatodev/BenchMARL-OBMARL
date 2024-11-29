@@ -71,7 +71,7 @@ class Encoder(nn.Module):
         return embedding
 
 
-class ObjectiveMatchingGNN(Model):
+class DisperseObjectiveMatchingGNN(Model):
     def __init__(
             self,
             activation_class: Type[nn.Module],
@@ -102,19 +102,19 @@ class ObjectiveMatchingGNN(Model):
 
         self.node_pos_encoder = Encoder(2, 8).to(self.device)
         self.edge_encoder = Encoder(2, 8).to(self.device)
-        self.matching_gnn = GATv2Conv(2, 128, 1, edge_dim=3).to(self.device)
+        self.matching_gnn = GATv2Conv(16, 8, 1, edge_dim=3).to(self.device)
         self.agent_gnn = GATv2Conv(269, 128, 1, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=128,
+            n_agent_inputs=29,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
             share_params=self.share_params,
             device=self.device,
             activation_class=self.activation_function,
-            depth=3,
-            num_cells=[128, 64, 32],
+            depth=2,
+            num_cells=[32, 32],
         )
 
     def _perform_checks(self):
@@ -134,7 +134,31 @@ class ObjectiveMatchingGNN(Model):
             landmark_positions = landmark_positions[:, :, 2:]  # Shape: [10, 1, 8]
             # Step 3: Reshape to [10, 4, 2]
 
-            landmark_positions = landmark_positions.reshape(-1, 2)
+            # these are now the positions where we want the agents to be on
+            objective_node_positions = landmark_positions.reshape(-1, 2)
+
+            # now we compute the relative positions of the landmarks with respect to the objective positions
+            # relative positions of the landmarks
+            objective_node_features = []
+            for i in range(batch_size):
+                relative_pos = []
+                landmark_positions = landmark_positions.view(batch_size, self.n_agents, -1)
+                for j in range(self.n_agents):
+                    single_node_features = []
+                    single_node_features.append(objective_node_positions[i * self.n_agents + j])
+                    single_node_features.append(torch.tensor([0]).to(self.device))
+                    single_node_features.append(torch.tensor([0]).to(self.device))
+                    for k in range(self.n_agents):
+                        single_node_features.append(
+                            landmark_positions[i][k] - objective_node_positions[i * self.n_agents + j])
+                        single_node_features.append(torch.tensor([1]).to(self.device))
+
+                    relative_pos.append(torch.cat(single_node_features, dim=0))
+
+                objective_node_features.append(torch.stack(relative_pos))
+
+            objective_node_features = torch.stack(objective_node_features).to(self.device).view(-1, 16)
+            # tensor = torch.stack([torch.stack([torch.stack(inner) for inner in outer]) for outer in objective_node_features])
 
             # Commenting this out given that we don't want it in the initial objetive graph
             # [:, :, 1:] to remove the first column which is the agent status
@@ -143,44 +167,52 @@ class ObjectiveMatchingGNN(Model):
             # node_features = torch.cat([landmark_positions, landmark_eaten], dim=1)
 
             # Objective graph representation
-            graphs = generate_graph(batch_size, landmark_positions, landmark_positions, None, self.n_agents,
+            landmark_positions = landmark_positions.reshape(-1, 2)
+            graphs = generate_graph(batch_size, objective_node_features, landmark_positions, None, self.n_agents,
                                     self.device)
             h1 = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
 
             # create the agent - agent graph
             agent_positions = tensordict.get("agents")["observation"]["agent_pos"]
+            agent_vel = tensordict.get("agents")["observation"]["agent_vel"]
 
-            graphs = generate_graph(batch_size, agent_positions.view(-1, 2), agent_positions.view(-1, 2), None,
+            node_features = torch.cat([agent_positions, agent_vel, tensordict.get("agents")["observation"]["relative_landmark_pos"]], dim=2)
+
+            graphs = generate_graph(batch_size, node_features.view(-1, 16), agent_positions.view(-1, 2), None,
                                     self.n_agents, self.device)
             # Agent-Agent graph representation
             h2 = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
+
+            # graph pooling
+            h1 = torch_geometric.nn.global_add_pool(h1, graphs.batch)
+            h2 = torch_geometric.nn.global_add_pool(h2, graphs.batch)
 
             # Get cosine similarity between agent and objective graph
             cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
             agent_objective_similarity = cos(h1, h2)
 
             # Concatenate the agent-objective similarity to the agent-objective graph
-            agent_final_obs = torch.cat([h1.reshape(batch_size, self.n_agents, -1),
-                                         h2.reshape(batch_size, self.n_agents, -1),
-                                         agent_objective_similarity.reshape(batch_size, self.n_agents, -1),
+            agent_final_obs = torch.cat([h1.unsqueeze(1).repeat(1, 4, 1),
+                                         h2.unsqueeze(1).repeat(1, 4, 1),
+                                         agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
                                          tensordict.get("agents")["observation"]["relative_landmark_pos"]], dim=2)
 
-            graphs = generate_graph(batch_size, agent_final_obs.view(-1, 269), agent_positions.view(-1, 2), None,
-                                    self.n_agents, self.device, use_radius=True, bc=1)
-            h3 = F.relu(self.agent_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
+            # graphs = generate_graph(batch_size, agent_final_obs.view(-1, 29), agent_positions.view(-1, 2), None,
+            #                         self.n_agents, self.device, use_radius=True, bc=1)
+            # h3 = F.relu(self.agent_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
 
-            res = F.relu(self.final_mlp.forward(h3.reshape(batch_size, self.n_agents, -1)))
+            res = F.relu(self.final_mlp.forward(agent_final_obs))
 
         tensordict.set(self.out_key, res)
         return tensordict
 
 
 @dataclass
-class ObjectiveMatchingGNNConfig(ModelConfig):
+class DisperseObjectiveMatchingGNNConfig(ModelConfig):
     # The config parameters for this class, these will be loaded from yaml
     activation_class: Type[nn.Module] = MISSING
 
     @staticmethod
     def associated_class():
         # The associated algorithm class
-        return ObjectiveMatchingGNN
+        return DisperseObjectiveMatchingGNN
