@@ -139,25 +139,42 @@ class DisperseObjectiveMatchingGNN(Model):
 
             # now we compute the relative positions of the landmarks with respect to the objective positions
             # relative positions of the landmarks
-            objective_node_features = []
+            # Precompute static tensors
+            zero_tensor = torch.tensor([0], device=self.device)
+            one_tensor = torch.tensor([1], device=self.device)
+
+            # Reshape landmark_positions beforehand
+            landmark_positions = landmark_positions.view(batch_size, self.n_agents, -1)
+
+            # Preallocate the result tensor
+            objective_node_features = torch.empty(batch_size * self.n_agents,
+                                                  self.n_agents * (landmark_positions.size(-1) + 1) + 4, device=self.device)
+
             for i in range(batch_size):
-                relative_pos = []
-                landmark_positions = landmark_positions.view(batch_size, self.n_agents, -1)
                 for j in range(self.n_agents):
-                    single_node_features = []
-                    single_node_features.append(objective_node_positions[i * self.n_agents + j])
-                    single_node_features.append(torch.tensor([0]).to(self.device))
-                    single_node_features.append(torch.tensor([0]).to(self.device))
-                    for k in range(self.n_agents):
-                        single_node_features.append(
-                            landmark_positions[i][k] - objective_node_positions[i * self.n_agents + j])
-                        single_node_features.append(torch.tensor([1]).to(self.device))
+                    base_index = i * self.n_agents + j
 
-                    relative_pos.append(torch.cat(single_node_features, dim=0))
+                    # Start with objective node position
+                    features = [objective_node_positions[base_index]]
 
-                objective_node_features.append(torch.stack(relative_pos))
+                    # Append two zeros
+                    features.append(torch.zeros(2, device=self.device))  # Efficiently append two zeros
 
-            objective_node_features = torch.stack(objective_node_features).to(self.device).view(-1, 16)
+                    # Compute relative positions and append labels
+                    relative_features = torch.cat([
+                        landmark_positions[i] - objective_node_positions[base_index].unsqueeze(0),
+                        # Broadcast subtraction
+                        torch.ones(self.n_agents, 1, device=self.device)  # Append a "1" label for each relative position
+                    ], dim=1).view(-1)  # Flatten
+
+                    features.append(relative_features)
+
+                    # Concatenate all features and assign to preallocated tensor
+                    objective_node_features[base_index] = torch.cat(features)  # Ensure exactly 16 elements
+
+            # Reshape the final tensor
+            objective_node_features = objective_node_features.view(-1, 16)
+
             # tensor = torch.stack([torch.stack([torch.stack(inner) for inner in outer]) for outer in objective_node_features])
 
             # Commenting this out given that we don't want it in the initial objetive graph
