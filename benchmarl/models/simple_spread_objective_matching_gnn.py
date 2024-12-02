@@ -102,19 +102,19 @@ class SimpleSpreadObjectiveMatchingGNN(Model):
 
         self.node_pos_encoder = Encoder(2, 8).to(self.device)
         self.edge_encoder = Encoder(2, 8).to(self.device)
-        self.matching_gnn = GATv2Conv(2, 128, 1, edge_dim=3).to(self.device)
+        self.matching_gnn = GATv2Conv(14, 32, 1, edge_dim=3).to(self.device)
         self.agent_gnn = GATv2Conv(263, 128, 1, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=128,
+            n_agent_inputs=65,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
             share_params=self.share_params,
             device=self.device,
             activation_class=self.activation_function,
-            depth=3,
-            num_cells=[128, 64, 32],
+            depth=2,
+            num_cells=[32, 32],
         )
 
     def _perform_checks(self):
@@ -127,46 +127,69 @@ class SimpleSpreadObjectiveMatchingGNN(Model):
             batch_size = tensordict.get("agents")["observation"]["agent_pos"].shape[:-2][0]
 
             # reorganize the landmark positions for the matching GNN
-            landmark_positions = tensordict.get("agents")["observation"]["landmark_pos"] # Shape: [batch_size, n_agents, n_agents * 2]
+            landmark_positions = tensordict.get("agents")["observation"][
+                "landmark_pos"]  # Shape: [batch_size, n_agents, n_agents * 2]
             # Step 1: Keep only the first element in the second dimension
-            landmark_positions = landmark_positions[:, :1, :]  # Shape: [batch_size, 1, n_agents * 2]
+            single_landmark_positions = landmark_positions[:, :1, :]  # Shape: [batch_size, 1, n_agents * 2]
             # Step 2: Reshape
-            landmark_positions = landmark_positions.reshape(-1, 2)  # Shape: [batch_size, n_agents, 2]
+            objective_pos = single_landmark_positions.reshape(-1, 2)  # Shape: [batch_size, n_agents, 2]
+            obj_shape = objective_pos.shape[0]
+            objective_vel = torch.zeros(obj_shape, 2).to(device=self.device)
 
-            # Commenting this out given that we don't want it in the initial objetive graph
-            # [:, :, 1:] to remove the first column which is the agent status
-            # landmark_eaten = tensordict.get("agents")["observation"]["landmark_eaten"][:, :, 1:]
-            # landmark_eaten = landmark_eaten.view(-1, 1)
-            # node_features = torch.cat([landmark_positions, landmark_eaten], dim=1)
+            # compute the relative landmark positions
+            relative_env_landmarks = landmark_positions.view(-1, 6) - objective_pos.repeat(1, landmark_positions.size(
+                2) // objective_pos.size(1)).to(device=self.device)
+
+            # compute other agents positions
+            relative_other_positions = relative_env_landmarks[relative_env_landmarks != 0].view(-1, 4).to(
+                device=self.device)
+
+            # cat final objective node features
+            objective_node_features = torch.cat(
+                [objective_pos, objective_vel, relative_env_landmarks, relative_other_positions], dim=1)
 
             # Objective graph representation
-            graphs = generate_graph(batch_size, landmark_positions, landmark_positions, None, self.n_agents,
+            graphs = generate_graph(batch_size, objective_node_features, objective_pos, None, self.n_agents,
                                     self.device)
             h1 = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
 
             # create the agent - agent graph
             agent_positions = tensordict.get("agents")["observation"]["agent_pos"]
+            agent_velocities = tensordict.get("agents")["observation"]["agent_vel"]
+            other_pos = tensordict.get("agents")["observation"]["other_pos"]
+            relative_landmarks = tensordict.get("agents")["observation"]["relative_landmark_pos"]
 
-            graphs = generate_graph(batch_size, agent_positions.view(-1, 2), agent_positions.view(-1, 2), None,
+            # agent features
+            agents_features = torch.cat([agent_positions,
+                                         agent_velocities,
+                                         other_pos,
+                                         relative_landmarks], dim=2).view(-1, 14)
+
+            graphs = generate_graph(batch_size, agents_features, agent_positions.view(-1, 2), None,
                                     self.n_agents, self.device)
+
             # Agent-Agent graph representation
             h2 = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
+
+            # perform global pool
+            h1 = torch_geometric.nn.global_add_pool(h1, graphs.batch)
+            h2 = torch_geometric.nn.global_add_pool(h2, graphs.batch)
 
             # Get cosine similarity between agent and objective graph
             cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
             agent_objective_similarity = cos(h1, h2)
 
             # Concatenate the agent-objective similarity to the agent-objective graph
-            agent_final_obs = torch.cat([h1.reshape(batch_size, self.n_agents, -1),
-                                         h2.reshape(batch_size, self.n_agents, -1),
-                                         agent_objective_similarity.reshape(batch_size, self.n_agents, -1),
-                                         tensordict.get("agents")["observation"]["relative_landmark_pos"]], dim=2)
+            agent_final_obs = torch.cat([h1.unsqueeze(1).repeat(1, self.n_agents, 1),
+                                         h2.unsqueeze(1).repeat(1, self.n_agents, 1),
+                                         agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, self.n_agents, 1),
+                                         ], dim=2)
 
-            graphs = generate_graph(batch_size, agent_final_obs.view(-1, 263), agent_positions.view(-1, 2), None,
-                                    self.n_agents, self.device, use_radius=True, bc=1)
-            h3 = F.relu(self.agent_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
+            # graphs = generate_graph(batch_size, agent_final_obs.view(-1, 263), agent_positions.view(-1, 2), None,
+            #                         self.n_agents, self.device, use_radius=True, bc=1)
+            # h3 = F.relu(self.agent_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
 
-            res = F.relu(self.final_mlp.forward(h3.reshape(batch_size, self.n_agents, -1)))
+            res = F.relu(self.final_mlp.forward(agent_final_obs.reshape(batch_size, self.n_agents, -1)))
 
         tensordict.set(self.out_key, res)
         return tensordict
