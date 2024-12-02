@@ -106,7 +106,7 @@ class SimpleSpreadObjectiveMatchingGNN(Model):
         self.agent_gnn = GATv2Conv(263, 128, 1, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=65,
+            n_agent_inputs=79,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -183,6 +183,7 @@ class SimpleSpreadObjectiveMatchingGNN(Model):
             agent_final_obs = torch.cat([h1.unsqueeze(1).repeat(1, self.n_agents, 1),
                                          h2.unsqueeze(1).repeat(1, self.n_agents, 1),
                                          agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, self.n_agents, 1),
+                                         agents_features.view(-1, self.n_agents, 14)
                                          ], dim=2)
 
             # graphs = generate_graph(batch_size, agent_final_obs.view(-1, 263), agent_positions.view(-1, 2), None,
