@@ -106,7 +106,7 @@ class DisperseObjectiveMatchingGNN(Model):
         self.agent_gnn = GATv2Conv(269, 128, 1, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=29,
+            n_agent_inputs=33,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -141,13 +141,13 @@ class DisperseObjectiveMatchingGNN(Model):
 
             # wether a landmark has been eaten or not
             # Final tensor size: [240, 12]
-            final_tensor = torch.zeros(obj_shape, 12)
+            final_tensor = torch.zeros(obj_shape, 12).to(device=self.device)
 
             # Desired positions to insert 1s (0-based indexing)
-            positions = torch.tensor([2, 5, 8, 11])
+            positions = torch.tensor([2, 5, 8, 11]).to(device=self.device)
 
             # Create a mask to identify non-insert positions
-            mask = torch.ones(12, dtype=torch.bool)
+            mask = torch.ones(12, dtype=torch.bool).to(device=self.device)
             mask[positions] = False
 
             # Place original values in the appropriate positions
@@ -159,7 +159,7 @@ class DisperseObjectiveMatchingGNN(Model):
             # Reshape the final tensor
             objective_node_features = torch.cat([objective_pos,
                                                 obj_vel,
-                                                final_tensor], dim=1).view(-1, 16)
+                                                final_tensor], dim=1).view(-1, 16).to(device=self.device)
 
             # tensor = torch.stack([torch.stack([torch.stack(inner) for inner in outer]) for outer in objective_node_features])
 
@@ -199,6 +199,8 @@ class DisperseObjectiveMatchingGNN(Model):
             agent_final_obs = torch.cat([h1.unsqueeze(1).repeat(1, 4, 1),
                                          h2.unsqueeze(1).repeat(1, 4, 1),
                                          agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
+                                         agent_positions,
+                                         agent_vel,
                                          tensordict.get("agents")["observation"]["relative_landmark_pos"]], dim=2)
 
             # graphs = generate_graph(batch_size, agent_final_obs.view(-1, 29), agent_positions.view(-1, 2), None,
