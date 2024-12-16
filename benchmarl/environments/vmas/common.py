@@ -25,6 +25,7 @@ class VmasTask(Task):
     WHEEL = None
     DISPERSION = None
     DISPERSION_GRAPH = None
+    DISPERSION_REWARD_GRAPH = None
     MULTI_GIVE_WAY = None
     DROPOUT = None
     GIVE_WAY = None

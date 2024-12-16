@@ -169,6 +169,58 @@ class DisperseObjectiveMatchingGNN(Model):
             # landmark_eaten = landmark_eaten.view(-1, 1)
             # node_features = torch.cat([landmark_positions, landmark_eaten], dim=1)
 
+            # reorganize the landmark positions for the matching GNN
+            landmark_positions = tensordict.get("agents")["observation"]["landmark_pos"]
+            # Step 1: Keep only the first element in the second dimension
+            landmark_positions = landmark_positions[:, :1, :]  # Shape: [10, 1, 10]
+            # Step 2: Remove the first two elements in the third dimension
+            # landmark_positions = landmark_positions[:, :, 2:]  # Shape: [10, 1, 8]
+            # Step 3: Reshape to [10, 4, 2]
+
+            # these are now the positions where we want the agents to be on
+            objective_node_positions = landmark_positions.reshape(-1, 2)
+
+            # now we compute the relative positions of the landmarks with respect to the objective positions
+            # relative positions of the landmarks
+            # Precompute static tensors
+            zero_tensor = torch.tensor([0], device=self.device)
+            one_tensor = torch.tensor([1], device=self.device)
+
+            # Reshape landmark_positions beforehand
+            landmark_positions = landmark_positions.view(batch_size, self.n_agents, -1)
+
+            # Preallocate the result tensor
+            objective_node_features = torch.empty(batch_size * self.n_agents,
+                                                  self.n_agents * (landmark_positions.size(-1) + 1) + 4,
+                                                  device=self.device)
+
+            for i in range(batch_size):
+                for j in range(self.n_agents):
+                    base_index = i * self.n_agents + j
+
+                    # Start with objective node position
+                    features = [objective_node_positions[base_index]]
+
+                    # Append two zeros
+                    features.append(torch.zeros(2, device=self.device))  # Efficiently append two zeros
+
+                    # Compute relative positions and append labels
+                    relative_features = torch.cat([
+                        landmark_positions[i] - objective_node_positions[base_index].unsqueeze(0),
+                        # Broadcast subtraction
+                        torch.ones(self.n_agents, 1, device=self.device)
+                        # Append a "1" label for each relative position
+                    ], dim=1).view(-1)  # Flatten
+
+                    features.append(relative_features)
+
+                    # Concatenate all features and assign to preallocated tensor
+                    objective_node_features[base_index] = torch.cat(features)  # Ensure exactly 16 elements
+
+            # Reshape the final tensor
+            objective_node_features2 = objective_node_features.view(-1, 16)
+
+            torch.testing.assert_close(objective_node_features, objective_node_features2)
             # Objective graph representation
             landmark_positions = landmark_positions.reshape(-1, 2)
             graphs = generate_graph(batch_size, objective_node_features, landmark_positions, None, self.n_agents,
@@ -194,6 +246,8 @@ class DisperseObjectiveMatchingGNN(Model):
             # Get cosine similarity between agent and objective graph
             cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
             agent_objective_similarity = cos(h1, h2)
+
+            # tensordict.set(('agents', 'info', 'similarity'), agent_objective_similarity)
 
             # Concatenate the agent-objective similarity to the agent-objective graph
             agent_final_obs = torch.cat([h1.unsqueeze(1).repeat(1, 4, 1),
