@@ -250,7 +250,9 @@ class DisperseObjectiveMatchingGNN(Model):
             # tensordict.set(('agents', 'info', 'similarity'), agent_objective_similarity)
 
             # Concatenate the agent-objective similarity to the agent-objective graph
-            agent_final_obs = torch.cat([h1.unsqueeze(1).repeat(1, 4, 1),
+            agent_final_obs = torch.cat([
+                                         tensordict.get("agents")["observation"]["agent_index"],
+                                         h1.unsqueeze(1).repeat(1, 4, 1),
                                          h2.unsqueeze(1).repeat(1, 4, 1),
                                          agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
                                          agent_positions,
