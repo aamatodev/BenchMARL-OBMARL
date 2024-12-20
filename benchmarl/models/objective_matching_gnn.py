@@ -30,12 +30,12 @@ def graph_distance(objective_node_features, agent_node_features):
     for i in range(objective_node_features.shape[0]):
         env_dist = []
         for j in range(objective_node_features.shape[1]):
-            # distance = torch.min((torch.linalg.norm(objective_node_features[i][j] - agent_node_features[i], dim=1) - (-1)) / 2 )
-            cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
-            agent_objective_similarity = torch.max(cos(objective_node_features[i][j], agent_node_features[i]))
-            env_dist.append(agent_objective_similarity)
+            distance = torch.min((torch.linalg.norm(objective_node_features[i][j] - agent_node_features[i], dim=1)))
+            # cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
+            # agent_objective_similarity = torch.max(cos(objective_node_features[i][j], agent_node_features[i]))
+            env_dist.append(distance)
 
-        graph_dist.append(torch.sum(torch.stack(env_dist)) / objective_node_features.shape[1])
+        graph_dist.append(torch.sum(torch.stack(env_dist)))
     return torch.stack(graph_dist)
 
 
@@ -117,11 +117,10 @@ class DisperseObjectiveMatchingGNN(Model):
 
         self.node_pos_encoder = Encoder(2, 8).to(self.device)
         self.edge_encoder = Encoder(2, 8).to(self.device)
-        self.matching_gnn = GATv2Conv(16, 8, 1, edge_dim=3).to(self.device)
-        self.agent_gnn = GATv2Conv(269, 128, 1, edge_dim=3).to(self.device)
+        self.matching_gnn = GATv2Conv(16, 32, 1, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=33,
+            n_agent_inputs=82,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -129,7 +128,7 @@ class DisperseObjectiveMatchingGNN(Model):
             device=self.device,
             activation_class=self.activation_function,
             depth=2,
-            num_cells=[32, 32],
+            num_cells=[128, 128],
         )
 
     def _perform_checks(self):
@@ -205,17 +204,20 @@ class DisperseObjectiveMatchingGNN(Model):
             h2 = torch_geometric.nn.global_add_pool(h2, graphs.batch)
 
             # Get cosine similarity between agent and objective graph
-            # cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
-            # agent_objective_similarity = cos(h1, h2)
+            cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
+            agent_objective_similarity = cos(h1, h2)
 
-            similarity = graph_distance(objective_node_features.view((batch_size, self.n_agents, -1)),
-                                        node_features.view((batch_size, self.n_agents, -1)))
+            # similarity = graph_distance(objective_node_features.view((batch_size, self.n_agents, -1)),
+            #                             node_features.view((batch_size, self.n_agents, -1)))
+            similarity = graph_distance(landmark_positions.view((batch_size, self.n_agents, -1)),
+                                        agent_positions.view((batch_size, self.n_agents, -1)))
 
             # Concatenate the agent-objective similarity to the agent-objective graph
             agent_final_obs = torch.cat([
                 h1.unsqueeze(1).repeat(1, 4, 1),
                 h2.unsqueeze(1).repeat(1, 4, 1),
                 similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
+                agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
                 agent_positions,
                 agent_vel,
                 tensordict.get("agents")["observation"]["relative_landmark_pos"]], dim=2)
