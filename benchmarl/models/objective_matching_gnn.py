@@ -26,7 +26,6 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 
 
 def graph_distance(objective_node_features, agent_node_features):
-
     graph_dist = []
     for i in range(objective_node_features.shape[0]):
         env_dist = []
@@ -122,7 +121,7 @@ class DisperseObjectiveMatchingGNN(Model):
         self.agent_gnn = GATv2Conv(269, 128, 1, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=34,
+            n_agent_inputs=33,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -155,7 +154,6 @@ class DisperseObjectiveMatchingGNN(Model):
             relative_env_landmarks = landmark_positions.view(-1, 8) - objective_pos.repeat(1, landmark_positions.size(
                 2) // objective_pos.size(1)).to(device=self.device)
 
-            # wether a landmark has been eaten or not
             # Final tensor size: [240, 12]
             final_tensor = torch.zeros(obj_shape, 12).to(device=self.device)
 
@@ -170,7 +168,7 @@ class DisperseObjectiveMatchingGNN(Model):
             final_tensor[:, mask] = relative_env_landmarks
 
             # Insert 1s at the specified positions
-            final_tensor[:, positions] = 1
+            final_tensor[:, positions] = 0
 
             # Reshape the final tensor
             objective_node_features = torch.cat([objective_pos,
@@ -181,9 +179,6 @@ class DisperseObjectiveMatchingGNN(Model):
             landmark_positions = tensordict.get("agents")["observation"]["landmark_pos"]
             # Keep only the first element in the second dimension
             landmark_positions = landmark_positions[:, :1, :]  # Shape: [10, 1, 10]
-
-            # Reshape landmark_positions beforehand
-            landmark_positions = landmark_positions.view(batch_size, self.n_agents, -1)
 
             # Objective graph representation
             landmark_positions = landmark_positions.reshape(-1, 2)
@@ -201,7 +196,7 @@ class DisperseObjectiveMatchingGNN(Model):
 
             graphs = generate_graph(batch_size, node_features.view(-1, 16), agent_positions.view(-1, 2), None,
                                     self.n_agents, self.device)
-            agents_networkx_graph = torch_geometric.utils.to_networkx(graphs)
+
             # Agent-Agent graph representation
             h2 = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
 
@@ -216,22 +211,14 @@ class DisperseObjectiveMatchingGNN(Model):
             similarity = graph_distance(objective_node_features.view((batch_size, self.n_agents, -1)),
                                         node_features.view((batch_size, self.n_agents, -1)))
 
-
-            # tensordict.set(('agents', 'info', 'similarity'), agent_objective_similarity)
-
             # Concatenate the agent-objective similarity to the agent-objective graph
             agent_final_obs = torch.cat([
-                tensordict.get("agents")["observation"]["agent_index"],
                 h1.unsqueeze(1).repeat(1, 4, 1),
                 h2.unsqueeze(1).repeat(1, 4, 1),
                 similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
                 agent_positions,
                 agent_vel,
                 tensordict.get("agents")["observation"]["relative_landmark_pos"]], dim=2)
-
-            # graphs = generate_graph(batch_size, agent_final_obs.view(-1, 29), agent_positions.view(-1, 2), None,
-            #                         self.n_agents, self.device, use_radius=True, bc=1)
-            # h3 = F.relu(self.agent_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
 
             res = F.relu(self.final_mlp.forward(agent_final_obs))
 

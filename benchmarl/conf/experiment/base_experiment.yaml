@@ -10,7 +10,7 @@ train_device: "cuda"
 buffer_device: "cuda"
 
 # Whether to share the parameters of the policy within agent groups
-share_policy_params: True
+share_policy_params: False
 # If an algorithm and an env support both continuous and discrete actions, what should be preferred
 prefer_continuous_actions: False
 # If False collection is done using a collector (under no grad). If True, collection is done with gradients.
@@ -104,9 +104,9 @@ restore_file: null
 restore_map_location: null
 # Interval for experiment saving in terms of collected frames (this should be a multiple of on/off_policy_collected_frames_per_batch).
 # Set it to 0 to disable checkpointing
-checkpoint_interval: 0
+checkpoint_interval: 600000
 # Wether to checkpoint when the experiment is done
-checkpoint_at_end: False
+checkpoint_at_end: True
 # How many checkpoints to keep. As new checkpoints are taken, temporally older checkpoints are deleted to keep this number of
 # checkpoints. The checkpoint at the end is included in this number. Set to `null` to keep all checkpoints.
 keep_checkpoints_num: 3
