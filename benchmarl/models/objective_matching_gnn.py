@@ -27,16 +27,17 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 
 def graph_distance(objective_node_features, agent_node_features):
     graph_dist = []
+    cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
     for i in range(objective_node_features.shape[0]):
         env_dist = []
         for j in range(objective_node_features.shape[1]):
-            distance = torch.min((torch.linalg.norm(objective_node_features[i][j] - agent_node_features[i], dim=1))) / 2.828427125
-            # cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
-            # agent_objective_similarity = torch.max(cos(objective_node_features[i][j], agent_node_features[i]))
-            env_dist.append(distance)
+            # distance = torch.min((torch.linalg.norm(objective_node_features[i][j] - agent_node_features[i], dim=1))) / 8
 
-        graph_dist.append(torch.sum(torch.stack(env_dist)) / 4)
-    return torch.stack(graph_dist)
+            agent_objective_similarity = torch.max(cos(objective_node_features[i][j], agent_node_features[i]))
+            env_dist.append(agent_objective_similarity)
+
+        graph_dist.append((torch.sum(torch.stack(env_dist)) / 4))
+    return torch.stack( graph_dist)
 
 
 def generate_graph(batch_size, node_features, node_pos, edge_attr, n_agents, device, use_radius=False, bc=1):
@@ -203,16 +204,16 @@ class DisperseObjectiveMatchingGNN(Model):
             cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
             agent_objective_similarity = cos(h1, h2)
 
-            # similarity = graph_distance(objective_node_features.view((batch_size, self.n_agents, -1)),
-            #                             node_features.view((batch_size, self.n_agents, -1)))
-            similarity = graph_distance(landmark_positions.view((batch_size, self.n_agents, -1)),
-                                        agent_positions.view((batch_size, self.n_agents, -1)))
+            similarity = graph_distance(objective_node_features.view((batch_size, self.n_agents, -1)),
+                                        node_features.view((batch_size, self.n_agents, -1)))
+            # similarity = graph_distance(landmark_positions.view((batch_size, self.n_agents, -1)),
+            #                             agent_positions.view((batch_size, self.n_agents, -1)))
 
             # Concatenate the agent-objective similarity to the agent-objective graph
             agent_final_obs = torch.cat([
                 h1.unsqueeze(1).repeat(1, 4, 1),
                 h2.unsqueeze(1).repeat(1, 4, 1),
-                similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
+                # similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
                 agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
                 agent_positions,
                 agent_vel,
