@@ -12,6 +12,7 @@ from tensordict.nn import TensorDictModule, TensorDictSequential
 from torchrl.data import Composite, Unbounded
 from torchrl.modules import EGreedyModule, QValueModule, VDNMixer
 from torchrl.objectives import LossModule, QMixerLoss, ValueEstimators
+from benchmarl.algorithms.qmixer_contrastive import QMixerLossContrastive
 
 from benchmarl.algorithms.common import Algorithm, AlgorithmConfig
 from benchmarl.models.common import ModelConfig
@@ -38,13 +39,13 @@ class Vdn(Algorithm):
     #############################
 
     def _get_loss(
-        self, group: str, policy_for_loss: TensorDictModule, continuous: bool
+            self, group: str, policy_for_loss: TensorDictModule, continuous: bool
     ) -> Tuple[LossModule, bool]:
         if continuous:
             raise NotImplementedError("Vdn is not compatible with continuous actions.")
         else:
             # Loss
-            loss_module = QMixerLoss(
+            loss_module = QMixerLossContrastive(
                 policy_for_loss,
                 self.get_mixer(group),
                 delay_value=self.delay_value,
@@ -73,7 +74,7 @@ class Vdn(Algorithm):
         }
 
     def _get_policy_for_loss(
-        self, group: str, model_config: ModelConfig, continuous: bool
+            self, group: str, model_config: ModelConfig, continuous: bool
     ) -> TensorDictModule:
         n_agents = len(self.group_map[group])
         logits_shape = [
@@ -88,7 +89,10 @@ class Vdn(Algorithm):
         actor_output_spec = Composite(
             {
                 group: Composite(
-                    {"action_value": Unbounded(shape=logits_shape)},
+                    {"action_value": Unbounded(shape=logits_shape),
+                     "agent_embedding": Unbounded(shape=[4, 32]),
+                     "objective_embedding": Unbounded(shape=[4, 32]),
+                     "similarity_score" : Unbounded(shape=[4, 32])},
                     shape=(n_agents,),
                 )
             }
@@ -124,7 +128,7 @@ class Vdn(Algorithm):
         return TensorDictSequential(actor_module, value_module)
 
     def _get_policy_for_collection(
-        self, policy_for_loss: TensorDictModule, group: str, continuous: bool
+            self, policy_for_loss: TensorDictModule, group: str, continuous: bool
     ) -> TensorDictModule:
         if self.action_mask_spec is not None:
             action_mask_key = (group, "action_mask")

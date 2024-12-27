@@ -34,6 +34,7 @@ classes = [
     "QmixConfig",
     "Vdn",
     "VdnConfig",
+    "QMixerLossContrastive",
 ]
 
 # A registry mapping "algoname" to its config dataclass

@@ -140,8 +140,8 @@ class Model(TensorDictModuleBase, ABC):
                 "If input does not have an agent dimension the model should be marked as centralised"
             )
 
-        if len(self.out_keys) > 1:
-            raise ValueError("Currently models support just one output key")
+        # if len(self.out_keys) > 1:
+            # raise ValueError("Currently models support just one output key")
 
         if self.agent_group in self.input_spec.keys() and self.input_spec[
             self.agent_group

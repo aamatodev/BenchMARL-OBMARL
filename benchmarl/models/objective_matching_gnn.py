@@ -30,12 +30,12 @@ def graph_distance(objective_node_features, agent_node_features):
     for i in range(objective_node_features.shape[0]):
         env_dist = []
         for j in range(objective_node_features.shape[1]):
-            distance = torch.min((torch.linalg.norm(objective_node_features[i][j] - agent_node_features[i], dim=1)))
+            distance = torch.min((torch.linalg.norm(objective_node_features[i][j] - agent_node_features[i], dim=1))) / 2.828427125
             # cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
             # agent_objective_similarity = torch.max(cos(objective_node_features[i][j], agent_node_features[i]))
             env_dist.append(distance)
 
-        graph_dist.append(torch.sum(torch.stack(env_dist)))
+        graph_dist.append(torch.sum(torch.stack(env_dist)) / 4)
     return torch.stack(graph_dist)
 
 
@@ -105,10 +105,6 @@ class DisperseObjectiveMatchingGNN(Model):
             action_spec=kwargs.pop("action_spec"),
             model_index=kwargs.pop("model_index"),
             is_critic=kwargs.pop("is_critic"),
-        )
-
-        self.input_features = sum(
-            [spec.shape[-1] for spec in self.input_spec.values(True, True)]
         )
 
         self.output_features = self.output_leaf_spec.shape[-1]
@@ -224,7 +220,11 @@ class DisperseObjectiveMatchingGNN(Model):
 
             res = F.relu(self.final_mlp.forward(agent_final_obs))
 
-        tensordict.set(self.out_key, res)
+        tensordict.set(self.out_keys[0], res)
+        tensordict.set(self.out_keys[1], h1.unsqueeze(1).repeat(1, 4, 1))
+        tensordict.set(self.out_keys[2], h2.unsqueeze(1).repeat(1, 4, 1))
+        tensordict.set(self.out_keys[3], similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1))
+
         return tensordict
 
 
