@@ -1177,6 +1177,7 @@ class DiscreteSACLossContrastive(LossModule):
         out = {
             "loss_actor": loss_actor + sim_loss,
             "loss_qvalue": loss_value + sim_loss,
+            "sim_loss": sim_loss,
             "loss_alpha": loss_alpha,
             "alpha": self._alpha,
             "entropy": entropy.detach().mean(),
