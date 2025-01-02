@@ -117,7 +117,7 @@ class DisperseObjectiveMatchingGNN(Model):
         self.matching_gnn = GATv2Conv(16, 32, 1, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=82,
+            n_agent_inputs=81,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,

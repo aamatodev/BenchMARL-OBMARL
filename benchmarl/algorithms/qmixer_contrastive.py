@@ -388,8 +388,9 @@ class QMixerLossContrastive(LossModule):
             td_copy["agents"]["objective_embedding"],
             td_copy["agents"]["similarity_score"],
         )
-        loss = distance_loss(pred_val_index, target_value, self.loss_function) + 0.5 * sim_loss
-        return TensorDict({"loss": loss.mean()}, [])
+        loss = distance_loss(pred_val_index, target_value, self.loss_function)
+        final_loss = loss + 0.5 * sim_loss
+        return TensorDict({"loss": final_loss.mean()}, [])
 
     @property
     @_cache_values

@@ -3,11 +3,11 @@ defaults:
   - _self_
 
 # The device for collection (e.g. cuda)
-sampling_device: "cpu"
+sampling_device: "cuda"
 # The device for training (e.g. cuda)
-train_device: "cpu"
+train_device: "cuda"
 # The device for the replay buffer of off-policy algorithms (e.g. cuda)
-buffer_device: "cpu"
+buffer_device: "cuda"
 
 # Whether to share the parameters of the policy within agent groups
 share_policy_params: False
@@ -19,20 +19,20 @@ collect_with_grad: False
 # Discount factor
 gamma: 0.9
 # Learning rate
-lr: 0.00005
+lr: 0.0003
 # The epsilon parameter of the adam optimizer
-adam_eps: 0.000001
+adam_eps: 0.00001
 # Clips grad norm if true and clips grad value if false
 clip_grad_norm: True
 # The value for the clipping, if null no clipping
 clip_grad_val: 5
 
 # Whether to use soft or hard target updates
-soft_target_update: True
+soft_target_update: False
 # If soft_target_update is True, this is its polyak_tau
 polyak_tau: 0.005
 # If soft_target_update is False, this is the frequency of the hard trarget updates in terms of n_optimizer_steps
-hard_target_update_frequency: 5
+hard_target_update_frequency: 1000
 
 # When an exploration wrapper is used. This is its initial epsilon for annealing
 exploration_eps_init: 0.8
