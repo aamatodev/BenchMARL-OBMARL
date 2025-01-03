@@ -164,7 +164,7 @@ class DisperseObjectiveMatchingGNN(Model):
             final_tensor[:, mask] = relative_env_landmarks
 
             # Insert 1s at the specified positions
-            final_tensor[:, positions] = 0
+            final_tensor[:, positions] = 1
 
             # Reshape the final tensor
             objective_node_features = torch.cat([objective_pos,
@@ -222,9 +222,8 @@ class DisperseObjectiveMatchingGNN(Model):
             res = F.relu(self.final_mlp.forward(agent_final_obs))
 
         tensordict.set(self.out_keys[0], res)
-        tensordict.set(self.out_keys[1], h1.unsqueeze(1).repeat(1, 4, 1))
-        tensordict.set(self.out_keys[2], h2.unsqueeze(1).repeat(1, 4, 1))
-        tensordict.set(self.out_keys[3], similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1))
+        tensordict.set(self.out_keys[1], agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1))
+        tensordict.set(self.out_keys[2], similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1))
 
         return tensordict
 

@@ -17,7 +17,7 @@ from tensordict import TensorDict, TensorDictBase, TensorDictParams
 
 from tensordict.nn import dispatch, TensorDictModule
 from tensordict.utils import NestedKey
-from torch import Tensor
+from torch import Tensor, nn
 from torchrl.data.tensor_specs import Composite, TensorSpec
 from torchrl.data.utils import _find_action_space
 from torchrl.envs.utils import ExplorationType, set_exploration_type
@@ -47,9 +47,9 @@ def _delezify(func):
     return new_func
 
 
-def similarity_loss(z1, z2, true_similarity):
-    predicted_similarity = F.cosine_similarity(z1, z2, dim=2, eps=1e-6).reshape(-1, 4, 1)  # or Euclidean similarity
-    return F.mse_loss(predicted_similarity, true_similarity)
+def similarity_loss(predicted_similarity, true_similarity):
+    mae_loss = nn.L1Loss()
+    return mae_loss(predicted_similarity, true_similarity)
 
 
 def compute_log_prob(action_dist, action_or_tensordict, tensor_key):
@@ -1168,8 +1168,7 @@ class DiscreteSACLossContrastive(LossModule):
             )
 
         sim_loss = similarity_loss(
-            tensordict["agents"]["agent_embedding"],
-            tensordict["agents"]["objective_embedding"],
+            tensordict["agents"]["pred_similarity"],
             tensordict["agents"]["similarity_score"],
         )
 

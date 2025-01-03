@@ -173,8 +173,7 @@ class Masac(Algorithm):
             {
                 group: Composite(
                     {"logits": Unbounded(shape=logits_shape),
-                     "agent_embedding": Unbounded(shape=[4, 32]),
-                     "objective_embedding": Unbounded(shape=[4, 32]),
+                     "pred_similarity": Unbounded(shape=[4, 32]),
                      "similarity_score": Unbounded(shape=[4, 32])},
                     shape=(n_agents,),
                 )
