@@ -37,10 +37,10 @@ def graph_distance(objective_node_features, agent_node_features):
             env_dist.append(agent_objective_similarity)
 
         graph_dist.append((torch.sum(torch.stack(env_dist)) / 4))
-    return torch.stack( graph_dist)
+    return torch.stack(graph_dist)
 
 
-def generate_graph(batch_size, node_features, node_pos, edge_attr, n_agents, device, use_radius=False, bc=1):
+def generate_graph(batch_size, node_features, node_pos, edge_attr, n_agents, device, mode="complete", bc=1):
     b = torch.arange(batch_size * bc, device=device)
     graphs = torch_geometric.data.Batch()
     graphs.ptr = torch.arange(0, (batch_size * bc + 1) * n_agents, n_agents)
@@ -50,11 +50,11 @@ def generate_graph(batch_size, node_features, node_pos, edge_attr, n_agents, dev
     graphs.pos = node_pos
     graphs.edge_attr = edge_attr
 
-    if use_radius:
+    if mode == "radius":
         graphs.edge_index = torch_geometric.nn.pool.radius_graph(
             graphs.pos, batch=graphs.batch, r=0.5, loop=True
         )
-    else:
+    elif mode == "complete":
         adjacency = torch.ones(n_agents, n_agents, device=device, dtype=torch.long)
         edge_index, _ = torch_geometric.utils.dense_to_sparse(adjacency)
         # remove self loops
@@ -68,6 +68,23 @@ def generate_graph(batch_size, node_features, node_pos, edge_attr, n_agents, dev
         # the adjacency matrices remain independent
         batch_edge_index = edge_index.repeat(1, batch_size * bc) + batch * n_agents
         graphs.edge_index = batch_edge_index
+    elif mode == "first_node":
+        adjacency = torch.zeros(n_agents, n_agents, device=device, dtype=torch.long)
+        adjacency[0, :] = 1
+        adjacency[:, 0] = 1
+        edge_index, _ = torch_geometric.utils.dense_to_sparse(adjacency)
+        # remove self loops
+        graphs.edge_index, _ = torch_geometric.utils.remove_self_loops(edge_index)
+        n_edges = edge_index.shape[1]
+        # Tensor of shape [batch_size * n_edges]
+        # in which edges corresponding to the same graph have the same index.
+        batch = torch.repeat_interleave(b, n_edges)
+        # Edge index for the batched graphs of shape [2, n_edges * batch_size]
+        # we sum to each batch an offset of batch_num * n_agents to make sure that
+        # the adjacency matrices remain independent
+        batch_edge_index = edge_index.repeat(1, batch_size * bc) + batch * n_agents
+        graphs.edge_index = batch_edge_index
+
 
     graphs = torch_geometric.transforms.Cartesian(norm=False)(graphs)
     graphs = torch_geometric.transforms.Distance(norm=False)(graphs)
@@ -115,9 +132,11 @@ class DisperseObjectiveMatchingGNN(Model):
         self.node_pos_encoder = Encoder(2, 8).to(self.device)
         self.edge_encoder = Encoder(2, 8).to(self.device)
         self.matching_gnn = GATv2Conv(16, 32, 1, edge_dim=3).to(self.device)
+        self.agent_entity_gnn = GATv2Conv(2, 8, 1, edge_dim=3).to(self.device)
+        self.agent_agent_gnn = GATv2Conv(8, 16, 1, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=81,
+            n_agent_inputs=82,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -206,20 +225,44 @@ class DisperseObjectiveMatchingGNN(Model):
 
             similarity = graph_distance(objective_node_features.view((batch_size, self.n_agents, -1)),
                                         node_features.view((batch_size, self.n_agents, -1)))
+
+            landmark_positions = tensordict.get("agents")["observation"]["landmark_pos"].view(-1, 4, 2)
+            agent_positions = tensordict.get("agents")["observation"]["agent_pos"].view(-1, 1, 2)
+
+            node_features = torch.cat([agent_positions,
+                                       landmark_positions], dim=1)
+
+            graphs = generate_graph(batch_size, node_features.view(-1, 2), node_features.view(-1, 2), None,
+                                    self.n_agents + 1, self.device, mode="first_node")
+
+            agent_entity = F.relu(self.agent_entity_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
+
+            graphs = generate_graph(batch_size, agent_entity.view(batch_size * self.n_agents, -1, 8)[:, 1, :], agent_positions.view(-1, 2), None,
+                                    self.n_agents, self.device)
+
+            agent_agent = F.relu(self.agent_agent_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
+
             # similarity = graph_distance(landmark_positions.view((batch_size, self.n_agents, -1)),
             #                             agent_positions.view((batch_size, self.n_agents, -1)))
 
             # Concatenate the agent-objective similarity to the agent-objective graph
-            agent_final_obs = torch.cat([
+            # agent_final_obs = torch.cat([
+            #     h1.unsqueeze(1).repeat(1, 4, 1),
+            #     h2.unsqueeze(1).repeat(1, 4, 1),
+            #     similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
+            #     agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
+            #     agent_positions,
+            #     agent_vel,
+            #     tensordict.get("agents")["observation"]["relative_landmark_pos"]], dim=2)
+
+            similarity_module_obs = torch.cat([
                 h1.unsqueeze(1).repeat(1, 4, 1),
                 h2.unsqueeze(1).repeat(1, 4, 1),
-                # similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
+                similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
                 agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
-                agent_positions,
-                agent_vel,
-                tensordict.get("agents")["observation"]["relative_landmark_pos"]], dim=2)
+                agent_agent.view(batch_size, 4, -1)], dim=2)
 
-            res = F.relu(self.final_mlp.forward(agent_final_obs))
+            res = F.relu(self.final_mlp.forward(similarity_module_obs))
 
         tensordict.set(self.out_keys[0], res)
         tensordict.set(self.out_keys[1], agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1))
