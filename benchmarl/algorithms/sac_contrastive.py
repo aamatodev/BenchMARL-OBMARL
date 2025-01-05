@@ -52,6 +52,40 @@ def similarity_loss(predicted_similarity, true_similarity):
     return mae_loss(predicted_similarity, true_similarity)
 
 
+def contrastive_loss(current_state_embeddings,
+                     positive_embeddings,
+                     negative_embeddings,
+                     margin=0.5):
+    """
+    Computes the contrastive loss.
+
+    Args:
+        current_state_embeddings (torch.Tensor): Encodings of the current states. Shape: (batch_size, embedding_dim)
+        positive_embeddings (torch.Tensor): Encodings of positive examples. Shape: (batch_size, embedding_dim)
+        negative_embeddings (torch.Tensor): Encodings of negative examples. Shape: (batch_size, embedding_dim)
+        margin (float): The margin for negative pairs. Encourages dissimilarity beyond this value.
+
+    Returns:
+        torch.Tensor: The computed contrastive loss.
+    """
+    # Normalize embeddings to ensure cosine similarity in [-1, 1]
+    current_state_norm = F.normalize(current_state_embeddings, p=2, dim=-1)
+    positive_norm = F.normalize(positive_embeddings, p=2, dim=-1)
+    negative_norm = F.normalize(negative_embeddings, p=2, dim=-1)
+
+    # Compute cosine similarity
+    positive_similarity = torch.sum(current_state_norm * positive_norm, dim=-1)  # Shape: (batch_size,)
+    negative_similarity = torch.sum(current_state_norm * negative_norm, dim=-1)  # Shape: (batch_size,)
+
+    # Contrastive loss
+    positive_loss = -torch.log(torch.sigmoid(positive_similarity))  # Encourage similarity
+    negative_loss = -torch.log(torch.sigmoid(margin - negative_similarity))  # Encourage dissimilarity
+
+    # Total loss
+    loss = positive_loss.mean() + negative_loss.mean()
+    return loss
+
+
 def compute_log_prob(action_dist, action_or_tensordict, tensor_key):
     """Compute the log probability of an action given a distribution."""
     if isinstance(action_or_tensordict, torch.Tensor):
@@ -1167,16 +1201,17 @@ class DiscreteSACLossContrastive(LossModule):
                 f"Losses shape mismatch: {loss_actor.shape}, and {loss_value.shape}"
             )
 
-        sim_loss = similarity_loss(
-            tensordict["agents"]["pred_similarity"],
-            tensordict["agents"]["similarity_score"],
+        loss_contrastive = contrastive_loss(
+            tensordict["agents"]["current_embedding"],
+            tensordict["agents"]["positive_embedding"],
+            tensordict["agents"]["negative_embedding"],
         )
 
         entropy = -metadata_actor["log_prob"]
         out = {
-            "loss_actor": loss_actor + sim_loss,
-            "loss_qvalue": loss_value + sim_loss,
-            "sim_loss": sim_loss,
+            "loss_actor": loss_actor + loss_contrastive,
+            "loss_qvalue": loss_value + loss_contrastive,
+            "sim_loss": loss_contrastive,
             "loss_alpha": loss_alpha,
             "alpha": self._alpha,
             "entropy": entropy.detach().mean(),

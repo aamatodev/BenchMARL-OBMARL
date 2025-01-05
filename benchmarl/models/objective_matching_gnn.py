@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch_geometric
 from torch_geometric.nn import GATv2Conv
-from torchrl.data import Composite, Unbounded
+from torchrl.data import Composite, Unbounded, ReplayBuffer, LazyTensorStorage
 
 from benchmarl.models import Gnn, GnnConfig, DeepsetsConfig, Deepsets
 from benchmarl.models.common import Model, ModelConfig
@@ -85,7 +85,6 @@ def generate_graph(batch_size, node_features, node_pos, edge_attr, n_agents, dev
         batch_edge_index = edge_index.repeat(1, batch_size * bc) + batch * n_agents
         graphs.edge_index = batch_edge_index
 
-
     graphs = torch_geometric.transforms.Cartesian(norm=False)(graphs)
     graphs = torch_geometric.transforms.Distance(norm=False)(graphs)
 
@@ -132,20 +131,174 @@ class DisperseObjectiveMatchingGNN(Model):
         self.node_pos_encoder = Encoder(2, 8).to(self.device)
         self.edge_encoder = Encoder(2, 8).to(self.device)
         self.matching_gnn = GATv2Conv(16, 32, 1, edge_dim=3).to(self.device)
-        self.agent_entity_gnn = GATv2Conv(2, 8, 1, edge_dim=3).to(self.device)
-        self.agent_agent_gnn = GATv2Conv(8, 16, 1, edge_dim=3).to(self.device)
+        self.graphs_encoder = MultiAgentMLP(
+            n_agent_inputs=64,
+            n_agent_outputs=32,
+            n_agents=self.n_agents,
+            centralised=self.centralised,
+            share_params=True,
+            device=self.device,
+            activation_class=self.activation_function,
+            depth=2,
+            num_cells=[128, 64],
+        )
+
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=82,
+            n_agent_inputs=112,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
             share_params=self.share_params,
             device=self.device,
             activation_class=self.activation_function,
-            depth=2,
-            num_cells=[128, 128],
+            depth=3,
+            num_cells=[128, 64, 64],
         )
+
+        self.positive_obs_buffer = ReplayBuffer(storage=LazyTensorStorage(500))
+        self.negative_obs_buffer = ReplayBuffer(storage=LazyTensorStorage(500))
+        print(f"The positive buffer has {len(self.positive_obs_buffer)} elements")
+        print(f"The negative buffer has {len(self.negative_obs_buffer)} elements")
+
+        self.fill_buffer(batch_size=500)
+
+        print(f"The positive buffer has {len(self.positive_obs_buffer)} elements")
+        print(f"The negative buffer has {len(self.negative_obs_buffer)} elements")
+
+    def fill_buffer(self, batch_size=150):
+        # Fill the positive buffer
+        # for positive samples, the agent and objective graph are the same
+        agent_pos = (torch.rand(batch_size, 4, 2).to(device=self.device) * 2) - 1
+        agent_vel = torch.zeros(batch_size, 4, 2).to(device=self.device)
+        single_landmark_positions = agent_pos.view(batch_size, 1, 8)
+        landmark_pos = single_landmark_positions.repeat(1, 4, 1)
+
+        # Step 2: Reshape
+        objective_pos = single_landmark_positions.reshape(-1, 2)  # Shape: [batch_size, n_agents, 2]
+        obj_shape = objective_pos.shape[0]
+        obj_vel = torch.zeros(obj_shape, 2).to(device=self.device)
+
+        # compute the relative landmark positions
+        relative_env_landmarks = landmark_pos.view(-1, 8) - objective_pos.repeat(1, landmark_pos.size(
+            2) // objective_pos.size(1)).to(device=self.device)
+
+        # Final tensor size: [240, 12]
+        final_tensor = torch.zeros(obj_shape, 12).to(device=self.device)
+
+        # inject the 1s as "eaten" landmarks
+        positions = torch.tensor([2, 5, 8, 11]).to(device=self.device)
+
+        # Create a mask to identify non-insert positions
+        mask = torch.ones(12, dtype=torch.bool).to(device=self.device)
+        mask[positions] = False
+
+        # Place original values in the appropriate positions
+        final_tensor[:, mask] = relative_env_landmarks
+
+        # Insert 1s at the specified positions
+        final_tensor[:, positions] = 1
+
+        # Reshape the final tensor
+        objective_node_features = torch.cat([objective_pos,
+                                             obj_vel,
+                                             final_tensor], dim=1).view(-1, 16).to(device=self.device)
+
+        shuffled_agent = torch.empty_like(agent_pos)  # Prepare a tensor for the output
+        shuffled_rel = torch.empty_like(final_tensor.view(batch_size, 4, -1))  # Prepare a tensor for the output
+        for i in range(batch_size):
+            perm = torch.randperm(4)  # Generate a random permutation for this row
+            shuffled_agent[i] = agent_pos[i, perm, :]
+            shuffled_rel[i] = final_tensor.view(batch_size, 4, -1)[i, perm, :]
+
+        node_features = torch.cat(
+            [shuffled_agent.view(-1, 2), agent_vel.view(-1, 2), shuffled_rel.view(-1, 12)], dim=1)
+
+        data = TensorDict(
+            {
+                "node_feature": node_features.view(batch_size, 4, 16),
+                "node_pos": shuffled_agent.view(batch_size, 4, 2),
+                "objective_node_feature": objective_node_features.view(batch_size, 4, 16),
+                "objective_node_pos": objective_pos.view(batch_size, 4, 2),
+            },
+            batch_size=[batch_size],
+        )
+        self.positive_obs_buffer.extend(data)
+
+        # Fill the negative buffer
+        # for negative samples, the agent and objective graph are different
+        agent_pos = (torch.rand(batch_size, 4, 2).to(device=self.device) * 2) - 1
+        agent_vel = torch.zeros(batch_size, 4, 2).to(device=self.device)
+        single_landmark_positions = ((torch.rand(batch_size, 4, 2) * 2) - 1).view(batch_size, 1, 8).to(device=self.device)
+        landmark_pos = single_landmark_positions.repeat(1, 4, 1)
+
+        # Step 2: Reshape
+        objective_pos = single_landmark_positions.reshape(-1, 2)  # Shape: [batch_size, n_agents, 2]
+        obj_shape = objective_pos.shape[0]
+        obj_vel = torch.zeros(obj_shape, 2).to(device=self.device)
+
+        # compute the relative landmark positions
+        relative_env_landmarks = landmark_pos.view(-1, 8) - objective_pos.repeat(1, landmark_pos.size(
+            2) // objective_pos.size(1)).to(device=self.device)
+
+        # Final tensor size: [240, 12]
+        final_tensor = torch.zeros(obj_shape, 12).to(device=self.device)
+
+        # inject the 1s as "eaten" landmarks
+        positions = torch.tensor([2, 5, 8, 11]).to(device=self.device)
+
+        # Create a mask to identify non-insert positions
+        mask = torch.ones(12, dtype=torch.bool).to(device=self.device)
+        mask[positions] = False
+
+        # Place original values in the appropriate positions
+        final_tensor[:, mask] = relative_env_landmarks
+
+        # Insert 1s at the specified positions
+        final_tensor[:, positions] = 1
+
+        # Reshape the final tensor
+        objective_node_features = torch.cat([objective_pos,
+                                             obj_vel,
+                                             final_tensor], dim=1).view(-1, 16).to(device=self.device)
+
+        # generate rel pos for nodes
+        # compute the relative landmark positions
+        relative_env_landmarks = landmark_pos.view(-1, 8) - agent_pos.view(-1, 2).repeat(1, landmark_pos.size(
+            2) // objective_pos.size(1)).to(device=self.device)
+
+        # Final tensor size: [240, 12]
+        final_tensor = torch.zeros(obj_shape, 12).to(device=self.device)
+
+        # inject the 1s as "eaten" landmarks
+        positions = torch.tensor([2, 5, 8, 11]).to(device=self.device)
+
+        # Create a mask to identify non-insert positions
+        mask = torch.ones(12, dtype=torch.bool).to(device=self.device)
+        mask[positions] = False
+
+        # Place original values in the appropriate positions
+        final_tensor[:, mask] = relative_env_landmarks
+
+        # Insert 1s at the specified positions
+        final_tensor[:, positions] = 0
+
+        node_features = torch.cat(
+            [agent_pos.view(-1, 2), agent_vel.view(-1, 2), final_tensor.view(-1, 12)], dim=1)
+
+        data = TensorDict(
+            {
+                "node_feature": node_features.view(batch_size, 4, 16),
+                "node_pos": agent_pos.view(batch_size, 4, 2),
+                "objective_node_feature": objective_node_features.view(batch_size, 4, 16),
+                "objective_node_pos": objective_pos.view(batch_size, 4, 2),
+            },
+            batch_size=[batch_size],
+        )
+
+        self.negative_obs_buffer.extend(data)
+
+
 
     def _perform_checks(self):
         super()._perform_checks()
@@ -223,50 +376,98 @@ class DisperseObjectiveMatchingGNN(Model):
             cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
             agent_objective_similarity = cos(h1, h2)
 
-            similarity = graph_distance(objective_node_features.view((batch_size, self.n_agents, -1)),
-                                        node_features.view((batch_size, self.n_agents, -1)))
+            # sample from positive and negative buffers
+            positive_sample = self.positive_obs_buffer.sample(batch_size).to(device=self.device)
+            negative_sample = self.negative_obs_buffer.sample(batch_size).to(device=self.device)
 
-            landmark_positions = tensordict.get("agents")["observation"]["landmark_pos"].view(-1, 4, 2)
-            agent_positions = tensordict.get("agents")["observation"]["agent_pos"].view(-1, 1, 2)
-
-            node_features = torch.cat([agent_positions,
-                                       landmark_positions], dim=1)
-
-            graphs = generate_graph(batch_size, node_features.view(-1, 2), node_features.view(-1, 2), None,
-                                    self.n_agents + 1, self.device, mode="first_node")
-
-            agent_entity = F.relu(self.agent_entity_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
-
-            graphs = generate_graph(batch_size, agent_entity.view(batch_size * self.n_agents, -1, 8)[:, 1, :], agent_positions.view(-1, 2), None,
+            graphs = generate_graph(batch_size, positive_sample["node_feature"].view(-1, 16),
+                                    positive_sample["node_pos"].view(-1, 2), None,
                                     self.n_agents, self.device)
 
-            agent_agent = F.relu(self.agent_agent_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
+            # Agent-Agent graph representation
+            positive_agent = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
+
+            graphs = generate_graph(batch_size, positive_sample["objective_node_feature"].view(-1, 16),
+                                    positive_sample["objective_node_pos"].view(-1, 2), None,
+                                    self.n_agents, self.device)
+            # Agent-Agent graph representation
+            positive_obj = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
+
+            graphs = generate_graph(batch_size, negative_sample["node_feature"].view(-1, 16),
+                                    negative_sample["node_pos"].view(-1, 2), None,
+                                    self.n_agents, self.device)
+
+            # Agent-Agent graph representation
+            negative_agent = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
+
+            graphs = generate_graph(batch_size, negative_sample["objective_node_feature"].view(-1, 16),
+                                    negative_sample["objective_node_pos"].view(-1, 2), None,
+                                    self.n_agents, self.device)
+            # Agent-Agent graph representation
+            negative_obj = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
+
+            # graph pooling
+            positive_agent = torch_geometric.nn.global_add_pool(positive_agent, graphs.batch)
+            positive_obj = torch_geometric.nn.global_add_pool(positive_obj, graphs.batch)
+            negative_agent = torch_geometric.nn.global_add_pool(negative_agent, graphs.batch)
+            negative_obj = torch_geometric.nn.global_add_pool(negative_obj, graphs.batch)
+
+            # get the final encoding
+            current_encoding_data = torch.cat([h1, h2], dim=1)
+            positive_encoding_data = torch.cat([positive_agent, positive_obj], dim=1)
+            negative_encoding_data = torch.cat([negative_agent, negative_obj], dim=1)
+
+            current_encoding = F.relu(self.graphs_encoder.forward(current_encoding_data.unsqueeze(1).repeat(1,4,1)).to(self.device))
+            positive_encoding = F.relu(self.graphs_encoder.forward(positive_encoding_data.unsqueeze(1).repeat(1,4,1)).to(self.device))
+            negative_encoding = F.relu(self.graphs_encoder.forward(negative_encoding_data.unsqueeze(1).repeat(1,4,1)).to(self.device))
+
+
+            # similarity = graph_distance(objective_node_features.view((batch_size, self.n_agents, -1)),
+            #                             node_features.view((batch_size, self.n_agents, -1)))
+
+            # landmark_positions = tensordict.get("agents")["observation"]["landmark_pos"].view(-1, 4, 2)
+            # agent_positions = tensordict.get("agents")["observation"]["agent_pos"].view(-1, 1, 2)
+
+            # node_features = torch.cat([agent_positions,
+            #                            landmark_positions], dim=1)
+
+            # graphs = generate_graph(batch_size, node_features.view(-1, 2), node_features.view(-1, 2), None,
+            #                         self.n_agents + 1, self.device, mode="first_node")
+
+            # agent_entity = F.relu(self.agent_entity_gnn(x=graphs.x, edge_index=graphs.edge_index,
+            # edge_attr=graphs.edge_attr))
+
+            # graphs = generate_graph(batch_size, agent_entity.view(batch_size * self.n_agents, -1, 8)[:, 1, :],
+            # agent_positions.view(-1, 2), None, self.n_agents, self.device)
+
+            # agent_agent = F.relu(self.agent_agent_gnn(x=graphs.x, edge_index=graphs.edge_index,
+            # edge_attr=graphs.edge_attr))
 
             # similarity = graph_distance(landmark_positions.view((batch_size, self.n_agents, -1)),
             #                             agent_positions.view((batch_size, self.n_agents, -1)))
 
             # Concatenate the agent-objective similarity to the agent-objective graph
-            # agent_final_obs = torch.cat([
+            agent_final_obs = torch.cat([
+                h1.unsqueeze(1).repeat(1, 4, 1),
+                h2.unsqueeze(1).repeat(1, 4, 1),
+                current_encoding,
+                agent_positions,
+                agent_vel,
+                tensordict.get("agents")["observation"]["relative_landmark_pos"]], dim=2)
+
+            # similarity_module_obs = torch.cat([
             #     h1.unsqueeze(1).repeat(1, 4, 1),
             #     h2.unsqueeze(1).repeat(1, 4, 1),
             #     similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
             #     agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
-            #     agent_positions,
-            #     agent_vel,
-            #     tensordict.get("agents")["observation"]["relative_landmark_pos"]], dim=2)
+            #     agent_agent.view(batch_size, 4, -1)], dim=2)
 
-            similarity_module_obs = torch.cat([
-                h1.unsqueeze(1).repeat(1, 4, 1),
-                h2.unsqueeze(1).repeat(1, 4, 1),
-                similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
-                agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
-                agent_agent.view(batch_size, 4, -1)], dim=2)
-
-            res = F.relu(self.final_mlp.forward(similarity_module_obs))
+            res = F.relu(self.final_mlp.forward(agent_final_obs))
 
         tensordict.set(self.out_keys[0], res)
-        tensordict.set(self.out_keys[1], agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1))
-        tensordict.set(self.out_keys[2], similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1))
+        tensordict.set(self.out_keys[1], current_encoding)
+        tensordict.set(self.out_keys[2], positive_encoding)
+        tensordict.set(self.out_keys[3], negative_encoding)
 
         return tensordict
 

@@ -12,6 +12,7 @@ from .isac import Isac, IsacConfig
 from .maddpg import Maddpg, MaddpgConfig
 from .mappo import Mappo, MappoConfig
 from .masac import Masac, MasacConfig
+from .masac_contrastive import MasacContrastive, MasacContrastiveConfig
 from .qmix import Qmix, QmixConfig
 from .vdn import Vdn, VdnConfig
 
@@ -35,6 +36,7 @@ classes = [
     "Vdn",
     "VdnConfig",
     "QMixerLossContrastive",
+    "MasacContrastive",
 ]
 
 # A registry mapping "algoname" to its config dataclass
@@ -45,6 +47,7 @@ algorithm_config_registry = {
     "maddpg": MaddpgConfig,
     "iddpg": IddpgConfig,
     "masac": MasacConfig,
+    "masaccontrastive": MasacContrastiveConfig,
     "isac": IsacConfig,
     "qmix": QmixConfig,
     "vdn": VdnConfig,
