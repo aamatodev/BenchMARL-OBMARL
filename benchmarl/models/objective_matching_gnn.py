@@ -143,9 +143,8 @@ class DisperseObjectiveMatchingGNN(Model):
             num_cells=[128, 64],
         )
 
-
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=112,
+            n_agent_inputs=50,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -153,7 +152,7 @@ class DisperseObjectiveMatchingGNN(Model):
             device=self.device,
             activation_class=self.activation_function,
             depth=3,
-            num_cells=[128, 64, 64],
+            num_cells=[128, 64, 32],
         )
 
         self.positive_obs_buffer = ReplayBuffer(storage=LazyTensorStorage(500))
@@ -229,7 +228,8 @@ class DisperseObjectiveMatchingGNN(Model):
         # for negative samples, the agent and objective graph are different
         agent_pos = (torch.rand(batch_size, 4, 2).to(device=self.device) * 2) - 1
         agent_vel = torch.zeros(batch_size, 4, 2).to(device=self.device)
-        single_landmark_positions = ((torch.rand(batch_size, 4, 2) * 2) - 1).view(batch_size, 1, 8).to(device=self.device)
+        single_landmark_positions = ((torch.rand(batch_size, 4, 2) * 2) - 1).view(batch_size, 1, 8).to(
+            device=self.device)
         landmark_pos = single_landmark_positions.repeat(1, 4, 1)
 
         # Step 2: Reshape
@@ -297,8 +297,6 @@ class DisperseObjectiveMatchingGNN(Model):
         )
 
         self.negative_obs_buffer.extend(data)
-
-
 
     def _perform_checks(self):
         super()._perform_checks()
@@ -385,26 +383,30 @@ class DisperseObjectiveMatchingGNN(Model):
                                     self.n_agents, self.device)
 
             # Agent-Agent graph representation
-            positive_agent = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
+            positive_agent = F.relu(
+                self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
 
             graphs = generate_graph(batch_size, positive_sample["objective_node_feature"].view(-1, 16),
                                     positive_sample["objective_node_pos"].view(-1, 2), None,
                                     self.n_agents, self.device)
             # Agent-Agent graph representation
-            positive_obj = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
+            positive_obj = F.relu(
+                self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
 
             graphs = generate_graph(batch_size, negative_sample["node_feature"].view(-1, 16),
                                     negative_sample["node_pos"].view(-1, 2), None,
                                     self.n_agents, self.device)
 
             # Agent-Agent graph representation
-            negative_agent = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
+            negative_agent = F.relu(
+                self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
 
             graphs = generate_graph(batch_size, negative_sample["objective_node_feature"].view(-1, 16),
                                     negative_sample["objective_node_pos"].view(-1, 2), None,
                                     self.n_agents, self.device)
             # Agent-Agent graph representation
-            negative_obj = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
+            negative_obj = F.relu(
+                self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
 
             # graph pooling
             positive_agent = torch_geometric.nn.global_add_pool(positive_agent, graphs.batch)
@@ -417,10 +419,12 @@ class DisperseObjectiveMatchingGNN(Model):
             positive_encoding_data = torch.cat([positive_agent, positive_obj], dim=1)
             negative_encoding_data = torch.cat([negative_agent, negative_obj], dim=1)
 
-            current_encoding = F.relu(self.graphs_encoder.forward(current_encoding_data.unsqueeze(1).repeat(1,4,1)).to(self.device))
-            positive_encoding = F.relu(self.graphs_encoder.forward(positive_encoding_data.unsqueeze(1).repeat(1,4,1)).to(self.device))
-            negative_encoding = F.relu(self.graphs_encoder.forward(negative_encoding_data.unsqueeze(1).repeat(1,4,1)).to(self.device))
-
+            current_encoding = F.relu(
+                self.graphs_encoder.forward(current_encoding_data.unsqueeze(1).repeat(1, 4, 1)).to(self.device))
+            positive_encoding = F.relu(
+                self.graphs_encoder.forward(positive_encoding_data.unsqueeze(1).repeat(1, 4, 1)).to(self.device))
+            negative_encoding = F.relu(
+                self.graphs_encoder.forward(negative_encoding_data.unsqueeze(1).repeat(1, 4, 1)).to(self.device))
 
             # similarity = graph_distance(objective_node_features.view((batch_size, self.n_agents, -1)),
             #                             node_features.view((batch_size, self.n_agents, -1)))
@@ -448,8 +452,10 @@ class DisperseObjectiveMatchingGNN(Model):
 
             # Concatenate the agent-objective similarity to the agent-objective graph
             agent_final_obs = torch.cat([
-                h1.unsqueeze(1).repeat(1, 4, 1),
-                h2.unsqueeze(1).repeat(1, 4, 1),
+                # h1.unsqueeze(1).repeat(1, 4, 1),
+                # h2.unsqueeze(1).repeat(1, 4, 1),
+                tensordict.get("agents")["observation"]["agent_index"],
+                agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
                 current_encoding,
                 agent_positions,
                 agent_vel,
