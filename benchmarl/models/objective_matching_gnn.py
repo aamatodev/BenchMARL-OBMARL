@@ -144,7 +144,7 @@ class DisperseObjectiveMatchingGNN(Model):
         )
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=50,
+            n_agent_inputs=113,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -429,18 +429,6 @@ class DisperseObjectiveMatchingGNN(Model):
             # similarity = graph_distance(objective_node_features.view((batch_size, self.n_agents, -1)),
             #                             node_features.view((batch_size, self.n_agents, -1)))
 
-            # landmark_positions = tensordict.get("agents")["observation"]["landmark_pos"].view(-1, 4, 2)
-            # agent_positions = tensordict.get("agents")["observation"]["agent_pos"].view(-1, 1, 2)
-
-            # node_features = torch.cat([agent_positions,
-            #                            landmark_positions], dim=1)
-
-            # graphs = generate_graph(batch_size, node_features.view(-1, 2), node_features.view(-1, 2), None,
-            #                         self.n_agents + 1, self.device, mode="first_node")
-
-            # agent_entity = F.relu(self.agent_entity_gnn(x=graphs.x, edge_index=graphs.edge_index,
-            # edge_attr=graphs.edge_attr))
-
             # graphs = generate_graph(batch_size, agent_entity.view(batch_size * self.n_agents, -1, 8)[:, 1, :],
             # agent_positions.view(-1, 2), None, self.n_agents, self.device)
 
@@ -452,9 +440,9 @@ class DisperseObjectiveMatchingGNN(Model):
 
             # Concatenate the agent-objective similarity to the agent-objective graph
             agent_final_obs = torch.cat([
-                # h1.unsqueeze(1).repeat(1, 4, 1),
-                # h2.unsqueeze(1).repeat(1, 4, 1),
-                tensordict.get("agents")["observation"]["agent_index"],
+                h1.unsqueeze(1).repeat(1, 4, 1),
+                h2.unsqueeze(1).repeat(1, 4, 1),
+                # tensordict.get("agents")["observation"]["agent_index"],
                 agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
                 current_encoding,
                 agent_positions,
