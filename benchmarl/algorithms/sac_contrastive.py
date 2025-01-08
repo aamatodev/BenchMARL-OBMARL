@@ -69,9 +69,9 @@ def contrastive_loss(current_state_embeddings,
         torch.Tensor: The computed contrastive loss.
     """
     # Normalize embeddings to ensure cosine similarity in [-1, 1]
-    current_state_norm = F.normalize(current_state_embeddings, p=2, dim=-1)
-    positive_norm = F.normalize(positive_embeddings, p=2, dim=-1)
-    negative_norm = F.normalize(negative_embeddings, p=2, dim=-1)
+    current_state_norm = F.normalize(current_state_embeddings, p=2, dim=0)
+    positive_norm = F.normalize(positive_embeddings, p=2, dim=0)
+    negative_norm = F.normalize(negative_embeddings, p=2, dim=0)
 
     # Compute cosine similarity
     positive_similarity = torch.sum(current_state_norm * positive_norm, dim=-1)  # Shape: (batch_size,)
