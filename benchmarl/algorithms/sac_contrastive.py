@@ -1201,17 +1201,19 @@ class DiscreteSACLossContrastive(LossModule):
                 f"Losses shape mismatch: {loss_actor.shape}, and {loss_value.shape}"
             )
 
-        loss_contrastive = contrastive_loss(
-            tensordict["agents"]["current_embedding"],
-            tensordict["agents"]["positive_embedding"],
-            tensordict["agents"]["negative_embedding"],
-        )
+        # loss_contrastive = contrastive_loss(
+        #     tensordict["agents"]["current_embedding"],
+        #     tensordict["agents"]["positive_embedding"],
+        #     tensordict["agents"]["negative_embedding"],
+        # )
+
+        sim_loss = 1 - tensordict["agents"]["similarity"].mean()
 
         entropy = -metadata_actor["log_prob"]
         out = {
-            "loss_actor": loss_actor + loss_contrastive,
-            "loss_qvalue": loss_value + loss_contrastive,
-            "sim_loss": loss_contrastive,
+            "loss_actor": loss_actor + sim_loss,
+            "loss_qvalue": loss_value,
+            "sim_loss": sim_loss,
             "loss_alpha": loss_alpha,
             "alpha": self._alpha,
             "entropy": entropy.detach().mean(),
