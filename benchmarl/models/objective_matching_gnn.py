@@ -25,6 +25,28 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
+
+def contrastive_reward(embedding_a, embedding_b, margin=10):
+    """
+    Calculate the reward based on contrastive loss-inspired function.
+
+    Args:
+        embedding_a (np.ndarray): The first embedding (agent's current state).
+        embedding_b (np.ndarray): The target embedding.
+        margin (float): The margin threshold for determining the reward.
+
+    Returns:
+        float: The reward value.
+    """
+    # Compute the squared Euclidean distance between the embeddings
+    distance = torch.linalg.norm(embedding_a - embedding_b, dim=-1) ** 2
+
+    # Calculate the reward using the margin-based function
+    reward = torch.max(torch.zeros(distance.shape).to(distance.device), margin - distance).unsqueeze(2)
+
+    return reward
+
+
 def graph_distance(objective_node_features, agent_node_features):
     graph_dist = []
     cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
@@ -144,7 +166,7 @@ class DisperseObjectiveMatchingGNN(Model):
         )
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=113,
+            n_agent_inputs=114,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -438,13 +460,16 @@ class DisperseObjectiveMatchingGNN(Model):
             #                             agent_positions.view((batch_size, self.n_agents, -1)))
 
             # Concatenate the agent-objective similarity to the agent-objective graph
+
+            c_rew = contrastive_reward(h1_p.unsqueeze(1).repeat(1, 4, 1), h2.unsqueeze(1).repeat(1, 4, 1))
+
             agent_final_obs = torch.cat([
                 h1.view(batch_size, 4, -1),
                 h1_p.unsqueeze(1).repeat(1, 4, 1),
                 h2.unsqueeze(1).repeat(1, 4, 1),
                 # tensordict.get("agents")["observation"]["agent_index"],
                 agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
-                # current_encoding,
+                c_rew,
                 agent_positions,
                 agent_vel,
                 tensordict.get("agents")["observation"]["relative_landmark_pos"]], dim=2)
@@ -460,8 +485,8 @@ class DisperseObjectiveMatchingGNN(Model):
 
         tensordict.set(self.out_keys[0], res)
         tensordict.set(self.out_keys[1], agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1))
-        tensordict.set(self.out_keys[2], h1_p.unsqueeze(1).repeat(1, 4, 1))
-        tensordict.set(self.out_keys[3], h2.unsqueeze(1).repeat(1, 4, 1))
+        tensordict.set(self.out_keys[2], c_rew)
+        # tensordict.set(self.out_keys[3], h2.unsqueeze(1).repeat(1, 4, 1))
 
         return tensordict
 
