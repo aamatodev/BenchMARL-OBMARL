@@ -1207,11 +1207,12 @@ class DiscreteSACLossContrastive(LossModule):
         #     tensordict["agents"]["negative_embedding"],
         # )
 
-        sim_loss = 0 - tensordict["agents"]["distance"].mean()
+        loss = nn.MSELoss()
+        sim_loss = loss(tensordict["agents"]["distance"], torch.zeros(tensordict["agents"]["distance"].shape).to(tensordict["agents"]["distance"].device))
 
         entropy = -metadata_actor["log_prob"]
         out = {
-            "loss_actor": loss_actor + 0.1 * sim_loss,
+            "loss_actor": loss_actor + 0.01 * sim_loss,
             "loss_qvalue": loss_value,
             "sim_loss": sim_loss,
             "loss_alpha": loss_alpha,
