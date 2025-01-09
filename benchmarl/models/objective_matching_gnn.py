@@ -44,7 +44,7 @@ def contrastive_reward(embedding_a, embedding_b, margin=10):
     # Calculate the reward using the margin-based function
     reward = torch.max(torch.zeros(distance.shape).to(distance.device), margin - distance).unsqueeze(2)
 
-    return reward
+    return distance.unsqueeze(2), reward
 
 
 def graph_distance(objective_node_features, agent_node_features):
@@ -461,7 +461,7 @@ class DisperseObjectiveMatchingGNN(Model):
 
             # Concatenate the agent-objective similarity to the agent-objective graph
 
-            c_rew = contrastive_reward(h1_p.unsqueeze(1).repeat(1, 4, 1), h2.unsqueeze(1).repeat(1, 4, 1))
+            distance, c_rew = contrastive_reward(h1_p.unsqueeze(1).repeat(1, 4, 1), h2.unsqueeze(1).repeat(1, 4, 1))
 
             agent_final_obs = torch.cat([
                 h1.view(batch_size, 4, -1),
@@ -469,7 +469,7 @@ class DisperseObjectiveMatchingGNN(Model):
                 h2.unsqueeze(1).repeat(1, 4, 1),
                 # tensordict.get("agents")["observation"]["agent_index"],
                 agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
-                c_rew,
+                distance,
                 agent_positions,
                 agent_vel,
                 tensordict.get("agents")["observation"]["relative_landmark_pos"]], dim=2)
@@ -486,6 +486,7 @@ class DisperseObjectiveMatchingGNN(Model):
         tensordict.set(self.out_keys[0], res)
         tensordict.set(self.out_keys[1], agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1))
         tensordict.set(self.out_keys[2], c_rew)
+        tensordict.set(self.out_keys[3], distance)
         # tensordict.set(self.out_keys[3], h2.unsqueeze(1).repeat(1, 4, 1))
 
         return tensordict
