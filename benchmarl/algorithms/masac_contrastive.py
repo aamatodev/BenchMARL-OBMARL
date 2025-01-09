@@ -173,9 +173,9 @@ class MasacContrastive(Algorithm):
             {
                 group: Composite(
                     {"logits": Unbounded(shape=logits_shape),
-                     "similarity": Unbounded(shape=[4, 32])},
-                     # "positive_embedding": Unbounded(shape=[4, 32]),
-                     # "negative_embedding": Unbounded(shape=[4, 32])},
+                     "similarity": Unbounded(shape=[4, 32]),
+                     "current_enc": Unbounded(shape=[4, 32]),
+                     "target_enc": Unbounded(shape=[4, 32])},
                     shape=(n_agents,),
                 )
             }
