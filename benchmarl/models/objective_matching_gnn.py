@@ -25,7 +25,7 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
-def contrastive_reward(embedding_a, embedding_b, margin=1):
+def contrastive_reward(embedding_a, embedding_b, margin=0.5):
     """
     Calculate the reward based on contrastive loss-inspired function.
 
@@ -38,12 +38,12 @@ def contrastive_reward(embedding_a, embedding_b, margin=1):
         float: The reward value.
     """
     # Compute the squared Euclidean distance between the embeddings
-    distance = torch.linalg.norm(embedding_a - embedding_b, dim=-1) ** 2
+    distance = torch.cdist(embedding_a, embedding_b, p=2)[:, 1, 1].unsqueeze(1).unsqueeze(2).repeat(1, 4, 1)
 
     # Calculate the reward using the margin-based function
-    reward = torch.max(torch.zeros(distance.shape).to(distance.device), margin - distance).unsqueeze(2)
+    reward = torch.max(torch.zeros(distance.shape).to(distance.device), margin - distance)
 
-    return distance.unsqueeze(2), reward
+    return distance, reward
 
 
 def graph_distance(objective_node_features, agent_node_features):
