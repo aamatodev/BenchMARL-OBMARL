@@ -1212,7 +1212,7 @@ class DiscreteSACLossContrastive(LossModule):
 
         entropy = -metadata_actor["log_prob"]
         out = {
-            "loss_actor": loss_actor + 0.01 * sim_loss,
+            "loss_actor": loss_actor + 0.001 * sim_loss,
             "loss_qvalue": loss_value,
             "sim_loss": sim_loss,
             "loss_alpha": loss_alpha,

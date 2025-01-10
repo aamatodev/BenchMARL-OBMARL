@@ -25,8 +25,7 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
-
-def contrastive_reward(embedding_a, embedding_b, margin=10):
+def contrastive_reward(embedding_a, embedding_b, margin=1):
     """
     Calculate the reward based on contrastive loss-inspired function.
 
