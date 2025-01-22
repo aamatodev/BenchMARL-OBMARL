@@ -46,6 +46,27 @@ def contrastive_reward(embedding_a, embedding_b, margin=0.5):
     return distance, reward
 
 
+def intrinsic_reward(embedding_a, embedding_b, target_embedding):
+    """
+    Calculate the reward based on contrastive loss-inspired function.
+
+    Args:
+        embedding_a (np.ndarray): The current embedding (agent's current state).
+        embedding_b (np.ndarray): The prev embedding.
+        target_embedding (np.ndarray): The target embedding.
+
+    Returns:
+        float: The reward value.
+    """
+    current_dist = torch.cdist(embedding_a, target_embedding, p=2)[:, 1, 1].unsqueeze(1).unsqueeze(2).repeat(1, 4, 1)
+    prev_dist = torch.cdist(embedding_b, target_embedding, p=2)[:, 1, 1].unsqueeze(1).unsqueeze(2).repeat(1, 4, 1)
+
+    # Calculate the reward using the margin-based function
+    reward = prev_dist - current_dist
+
+    return current_dist, reward
+
+
 def graph_distance(objective_node_features, agent_node_features):
     graph_dist = []
     cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
@@ -165,7 +186,7 @@ class DisperseObjectiveMatchingGNN(Model):
         )
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=114,
+            n_agent_inputs=112,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -178,8 +199,8 @@ class DisperseObjectiveMatchingGNN(Model):
 
         self.positive_obs_buffer = ReplayBuffer(storage=LazyTensorStorage(10000))
         self.negative_obs_buffer = ReplayBuffer(storage=LazyTensorStorage(10000))
-        print(f"The positive buffer has {len(self.positive_obs_buffer)} elements")
-        print(f"The negative buffer has {len(self.negative_obs_buffer)} elements")
+
+        self.prev_agent_encodings = []
 
         self.fill_buffer(batch_size=10000)
 
@@ -388,105 +409,106 @@ class DisperseObjectiveMatchingGNN(Model):
             h2 = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
 
             # graph pooling
-            h1_p = torch_geometric.nn.global_add_pool(h1, graphs.batch)
-            h2 = torch_geometric.nn.global_add_pool(h2, graphs.batch)
+            objective_pooling = torch_geometric.nn.global_add_pool(h1, graphs.batch)
+            current_pooling = torch_geometric.nn.global_add_pool(h2, graphs.batch)
 
-            # Get cosine similarity between agent and objective graph
-            cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
-            agent_objective_similarity = cos(h1_p, h2)
+            # sample positive examples
+            positive_data = self.positive_obs_buffer.sample(batch_size)
+            positive_agent_pos = positive_data.get("node_pos").to(self.device)
+            positive_agent_features = positive_data.get("node_feature").to(self.device)
+            positive_objective_pos = positive_data.get("objective_node_pos").to(self.device)
+            positive_objective_features = positive_data.get("objective_node_feature").to(self.device)
 
-            # # sample from positive and negative buffers
-            # positive_sample = self.positive_obs_buffer.sample(batch_size).to(device=self.device)
-            # negative_sample = self.negative_obs_buffer.sample(batch_size).to(device=self.device)
-            #
-            # graphs = generate_graph(batch_size, positive_sample["node_feature"].view(-1, 16),
-            #                         positive_sample["node_pos"].view(-1, 2), None,
-            #                         self.n_agents, self.device)
-            #
-            # # Agent-Agent graph representation
-            # positive_agent = F.relu(
-            #     self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
-            #
-            # graphs = generate_graph(batch_size, positive_sample["objective_node_feature"].view(-1, 16),
-            #                         positive_sample["objective_node_pos"].view(-1, 2), None,
-            #                         self.n_agents, self.device)
-            # # Agent-Agent graph representation
-            # positive_obj = F.relu(
-            #     self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
-            #
-            # graphs = generate_graph(batch_size, negative_sample["node_feature"].view(-1, 16),
-            #                         negative_sample["node_pos"].view(-1, 2), None,
-            #                         self.n_agents, self.device)
-            #
-            # # Agent-Agent graph representation
-            # negative_agent = F.relu(
-            #     self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
-            #
-            # graphs = generate_graph(batch_size, negative_sample["objective_node_feature"].view(-1, 16),
-            #                         negative_sample["objective_node_pos"].view(-1, 2), None,
-            #                         self.n_agents, self.device)
-            # # Agent-Agent graph representation
-            # negative_obj = F.relu(
-            #     self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
-            #
-            # # graph pooling
-            # positive_agent = torch_geometric.nn.global_add_pool(positive_agent, graphs.batch)
-            # positive_obj = torch_geometric.nn.global_add_pool(positive_obj, graphs.batch)
-            # negative_agent = torch_geometric.nn.global_add_pool(negative_agent, graphs.batch)
-            # negative_obj = torch_geometric.nn.global_add_pool(negative_obj, graphs.batch)
-            #
-            # # get the final encoding
-            # current_encoding_data = torch.cat([h1, h2], dim=1)
-            # positive_encoding_data = torch.cat([positive_agent, positive_obj], dim=1)
-            # negative_encoding_data = torch.cat([negative_agent, negative_obj], dim=1)
+            # positive agent graph
+            positive_agent_graph = generate_graph(batch_size, positive_agent_features.view(-1, 16),
+                                                  positive_agent_pos.view(-1, 2), None, self.n_agents,
+                                                  self.device)
+            positive_agent_graph_embedding = F.relu(
+                self.matching_gnn(x=positive_agent_graph.x, edge_index=positive_agent_graph.edge_index,
+                                  edge_attr=positive_agent_graph.edge_attr))
+            positive_agent_graph_pooling = torch_geometric.nn.global_add_pool(positive_agent_graph_embedding,
+                                                                              positive_agent_graph.batch)
 
-            # current_encoding = F.relu(
-            #     self.graphs_encoder.forward(current_encoding_data.unsqueeze(1).repeat(1, 4, 1)).to(self.device))
-            # positive_encoding = F.relu(
-            #     self.graphs_encoder.forward(positive_encoding_data.unsqueeze(1).repeat(1, 4, 1)).to(self.device))
-            # negative_encoding = F.relu(
-            #     self.graphs_encoder.forward(negative_encoding_data.unsqueeze(1).repeat(1, 4, 1)).to(self.device))
+            # positive objective graph
+            positive_objective_graph = generate_graph(batch_size, positive_objective_features.view(-1, 16),
+                                                      positive_objective_pos.view(-1, 2), None,
+                                                      self.n_agents, self.device)
+            positive_objective_graph_embedding = F.relu(
+                self.matching_gnn(x=positive_objective_graph.x, edge_index=positive_objective_graph.edge_index,
+                                  edge_attr=positive_objective_graph.edge_attr))
+            positive_objective_graph_pooling = torch_geometric.nn.global_add_pool(positive_objective_graph_embedding,
+                                                                                  positive_objective_graph.batch)
 
-            # similarity = torch.linalg.norm(h1_p - h2, dim=-1)**2
+            # negative examples graph
+            negative_data = self.negative_obs_buffer.sample(batch_size)
+            negative_agent_pos = negative_data.get("node_pos").to(self.device)
+            negative_agent_features = negative_data.get("node_feature").to(self.device)
+            negative_objective_pos = negative_data.get("objective_node_pos").to(self.device)
+            negative_objective_features = negative_data.get("objective_node_feature").to(self.device)
 
-            # graphs = generate_graph(batch_size, agent_entity.view(batch_size * self.n_agents, -1, 8)[:, 1, :],
-            # agent_positions.view(-1, 2), None, self.n_agents, self.device)
+            # negative agent graph
+            negative_agent_graph = generate_graph(batch_size, negative_agent_features.view(-1, 16),
+                                                  negative_agent_pos.view(-1, 2), None, self.n_agents,
+                                                  self.device)
+            negative_agent_graph_embedding = F.relu(
+                self.matching_gnn(x=negative_agent_graph.x, edge_index=negative_agent_graph.edge_index,
+                                  edge_attr=negative_agent_graph.edge_attr))
+            negative_agent_graph_pooling = torch_geometric.nn.global_add_pool(negative_agent_graph_embedding,
+                                                                              negative_agent_graph.batch)
 
-            # agent_agent = F.relu(self.agent_agent_gnn(x=graphs.x, edge_index=graphs.edge_index,
-            # edge_attr=graphs.edge_attr))
+            # negative objective graph
+            negative_objective_graph = generate_graph(batch_size, negative_objective_features.view(-1, 16),
+                                                      negative_objective_pos.view(-1, 2), None,
+                                                      self.n_agents, self.device)
+            negative_objective_graph_embedding = F.relu(
+                self.matching_gnn(x=negative_objective_graph.x, edge_index=negative_objective_graph.edge_index,
+                                  edge_attr=negative_objective_graph.edge_attr))
+            negative_objective_graph_pooling = torch_geometric.nn.global_add_pool(negative_objective_graph_embedding,
+                                                                                  negative_objective_graph.batch)
 
-            # similarity = graph_distance(landmark_positions.view((batch_size, self.n_agents, -1)),
-            #                             agent_positions.view((batch_size, self.n_agents, -1)))
+            # merge representations (pos, neg, and current)
+            positive_merged_rep = torch.cat([positive_agent_graph_pooling, positive_objective_graph_pooling], dim=1)
+            negative_merged_rep = torch.cat([negative_agent_graph_pooling, negative_objective_graph_pooling], dim=1)
+            current_merged_rep = torch.cat([current_pooling, objective_pooling], dim=1)
+            objective_merged_rep = torch.cat([objective_pooling, objective_pooling], dim=1)
 
-            # Concatenate the agent-objective similarity to the agent-objective graph
+            # encode the merged representations
+            positive_merged_rep_encoding = self.graphs_encoder(positive_merged_rep.unsqueeze(1).repeat(1, 4, 1))
+            negative_merged_rep_encoding = self.graphs_encoder(negative_merged_rep.unsqueeze(1).repeat(1, 4, 1))
+            current_merged_rep_encoding = self.graphs_encoder(current_merged_rep.unsqueeze(1).repeat(1, 4, 1))
+            objective_merged_rep_encoding = self.graphs_encoder(objective_merged_rep.unsqueeze(1).repeat(1, 4, 1))
 
-            distance, c_rew = contrastive_reward(h1_p.unsqueeze(1).repeat(1, 4, 1), h2.unsqueeze(1).repeat(1, 4, 1))
+            if len(self.prev_agent_encodings) == 0:
+                data = TensorDict(
+                    {
+                        "prev_state": current_merged_rep_encoding,
+                    },
+                    batch_size=[batch_size],
+                )
+                self.prev_agent_encodings.append(data)
+
+            # distance, i_rew = intrinsic_reward(current_merged_rep_encoding,
+            #                                    self.prev_agent_encodings[0].get("prev_state").to(self.device),
+            #                                    objective_merged_rep_encoding)
 
             agent_final_obs = torch.cat([
                 h1.view(batch_size, 4, -1),
-                h1_p.unsqueeze(1).repeat(1, 4, 1),
-                h2.unsqueeze(1).repeat(1, 4, 1),
-                # tensordict.get("agents")["observation"]["agent_index"],
-                agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
-                distance,
+                current_merged_rep_encoding,
+                objective_merged_rep_encoding,
+                # distance,
+                # i_rew,
                 agent_positions,
                 agent_vel,
                 tensordict.get("agents")["observation"]["relative_landmark_pos"]], dim=2)
 
-            # similarity_module_obs = torch.cat([
-            #     h1.unsqueeze(1).repeat(1, 4, 1),
-            #     h2.unsqueeze(1).repeat(1, 4, 1),
-            #     similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
-            #     agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1),
-            #     agent_agent.view(batch_size, 4, -1)], dim=2)
-
-            res = F.relu(self.final_mlp.forward(agent_final_obs))
+            res = F.relu(self.final_mlp(agent_final_obs))
 
         tensordict.set(self.out_keys[0], res)
-        tensordict.set(self.out_keys[1], agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, 4, 1))
-        tensordict.set(self.out_keys[2], c_rew)
-        tensordict.set(self.out_keys[3], distance)
-        # tensordict.set(self.out_keys[3], h2.unsqueeze(1).repeat(1, 4, 1))
+        # tensordict.set(self.out_keys[1], i_rew)
+        tensordict.set(self.out_keys[2], positive_merged_rep_encoding)
+        tensordict.set(self.out_keys[3], negative_merged_rep_encoding)
+        tensordict.set(self.out_keys[4], current_merged_rep_encoding)
+        tensordict.set(self.out_keys[5], objective_merged_rep_encoding)
 
         return tensordict
 
