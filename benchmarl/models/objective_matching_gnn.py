@@ -172,29 +172,31 @@ class DisperseObjectiveMatchingGNN(Model):
 
         self.node_pos_encoder = Encoder(2, 8).to(self.device)
         self.edge_encoder = Encoder(2, 8).to(self.device)
-        self.matching_gnn = GATv2Conv(16, 32, 1, edge_dim=3).to(self.device)
+        self.matching_gnn = GATv2Conv(16, 16, 1, edge_dim=3).to(self.device)
+        self.agent_entity_gnn = GATv2Conv(2, 4, 1, edge_dim=3).to(self.device)
+        self.agent_agent_gnn = GATv2Conv(5, 8, 1, edge_dim=3).to(self.device)
         self.graphs_encoder = MultiAgentMLP(
-            n_agent_inputs=64,
+            n_agent_inputs=32,
             n_agent_outputs=32,
             n_agents=self.n_agents,
             centralised=self.centralised,
             share_params=True,
             device=self.device,
             activation_class=self.activation_function,
-            depth=3,
-            num_cells=[128, 64, 32],
+            depth=1,
+            num_cells=[128],
         )
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=112,
+            n_agent_inputs=89,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
             share_params=self.share_params,
             device=self.device,
             activation_class=self.activation_function,
-            depth=3,
-            num_cells=[128, 64, 32],
+            depth=2,
+            num_cells=[64, 32],
         )
 
         self.positive_obs_buffer = ReplayBuffer(storage=LazyTensorStorage(10000))
@@ -478,26 +480,37 @@ class DisperseObjectiveMatchingGNN(Model):
             current_merged_rep_encoding = self.graphs_encoder(current_merged_rep.unsqueeze(1).repeat(1, 4, 1))
             objective_merged_rep_encoding = self.graphs_encoder(objective_merged_rep.unsqueeze(1).repeat(1, 4, 1))
 
-            if len(self.prev_agent_encodings) == 0:
-                data = TensorDict(
-                    {
-                        "prev_state": current_merged_rep_encoding,
-                    },
-                    batch_size=[batch_size],
-                )
-                self.prev_agent_encodings.append(data)
+            # agent entity graph
+            landmark_positions = tensordict.get("agents")["observation"]["landmark_pos"].view(-1, 4, 2)
+            agent_positions = tensordict.get("agents")["observation"]["agent_pos"].view(-1, 1, 2)
+            node_features = torch.cat([agent_positions,
+                                       landmark_positions], dim=1)
+            graphs = generate_graph(batch_size, node_features.view(-1, 2), node_features.view(-1, 2), None,
+                                    self.n_agents + 1, self.device, mode="first_node")
+            agent_entity = F.relu(
+                self.agent_entity_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
+
+            ids = torch.arange(self.n_agents).unsqueeze(1).unsqueeze(0).expand(batch_size, -1, -1).to(self.device)
+            agent_entity = agent_entity.view(batch_size * self.n_agents, -1, 4)[:, 1, :]
+            agent_entity = torch.cat((ids, agent_entity.view(batch_size, -1, 4)), dim=2)
+
+            graphs = generate_graph(batch_size, agent_entity.view(-1, 5),
+                                    agent_positions.view(-1, 2), None,
+                                    self.n_agents, self.device)
+            agent_agent = F.relu(
+                self.agent_agent_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
 
             # distance, i_rew = intrinsic_reward(current_merged_rep_encoding,
             #                                    self.prev_agent_encodings[0].get("prev_state").to(self.device),
             #                                    objective_merged_rep_encoding)
 
             agent_final_obs = torch.cat([
-                h1.view(batch_size, 4, -1),
+                # h1.view(batch_size, 4, -1),
+                ids,
                 current_merged_rep_encoding,
                 objective_merged_rep_encoding,
-                # distance,
-                # i_rew,
-                agent_positions,
+                agent_agent.view(batch_size, 4, -1),
+                agent_positions.view(batch_size, 4, -1),
                 agent_vel,
                 tensordict.get("agents")["observation"]["relative_landmark_pos"]], dim=2)
 
