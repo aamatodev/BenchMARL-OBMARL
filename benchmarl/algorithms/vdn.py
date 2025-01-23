@@ -90,9 +90,10 @@ class Vdn(Algorithm):
             {
                 group: Composite(
                     {"action_value": Unbounded(shape=logits_shape),
-                     "agent_embedding": Unbounded(shape=[4, 32]),
-                     "objective_embedding": Unbounded(shape=[4, 32]),
-                     "similarity_score" : Unbounded(shape=[4, 32])},
+                     "agent_embedding": Unbounded(shape=[n_agents, 32]),
+                     "objective_embedding": Unbounded(shape=[n_agents, 32]),
+                     "c_rew": Unbounded(shape=[n_agents, 1]),
+                     "distance": Unbounded(shape=[n_agents, 1])},
                     shape=(n_agents,),
                 )
             }

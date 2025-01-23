@@ -163,7 +163,7 @@ class Model(TensorDictModuleBase, ABC):
         return tensordict
 
     def share_params_with(self, other_model):
-        """Share paramters with another identical model model.
+        """Share paramters with another identical model.
 
         This function modifies in-place the parameters of ``other_model`` to reference the parameters of ``self``
 

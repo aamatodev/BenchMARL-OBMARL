@@ -172,9 +172,7 @@ class Masac(Algorithm):
         actor_output_spec = Composite(
             {
                 group: Composite(
-                    {"logits": Unbounded(shape=logits_shape),
-                     "pred_similarity": Unbounded(shape=[4, 32]),
-                     "similarity_score": Unbounded(shape=[4, 32])},
+                    {"logits": Unbounded(shape=logits_shape)},
                     shape=(n_agents,),
                 )
             }

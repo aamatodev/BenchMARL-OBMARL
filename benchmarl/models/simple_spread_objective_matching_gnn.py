@@ -24,6 +24,27 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
+def contrastive_reward(embedding_a, embedding_b, margin=0.2):
+    """
+    Calculate the reward based on contrastive loss-inspired function.
+
+    Args:
+        embedding_a (np.ndarray): The first embedding (agent's current state).
+        embedding_b (np.ndarray): The target embedding.
+        margin (float): The margin threshold for determining the reward.
+
+    Returns:
+        float: The reward value.
+    """
+    # Compute the squared Euclidean distance between the embeddings
+    distance = torch.cdist(embedding_a, embedding_b, p=2)[:, 1, 1].unsqueeze(1).unsqueeze(2).repeat(1, 3, 1)
+
+    # Calculate the reward using the margin-based function
+    reward = torch.max(torch.zeros(distance.shape).to(distance.device), margin - distance)
+
+    return distance, reward
+
+
 def generate_graph(batch_size, node_features, node_pos, edge_attr, n_agents, device, use_radius=False, bc=1):
     b = torch.arange(batch_size * bc, device=device)
     graphs = torch_geometric.data.Batch()
@@ -162,8 +183,8 @@ class SimpleSpreadObjectiveMatchingGNN(Model):
             # agent features
             agents_features = torch.cat([agent_positions,
                                          agent_velocities,
-                                         other_pos,
-                                         relative_landmarks], dim=2).view(-1, 14)
+                                         relative_landmarks,
+                                         other_pos], dim=2).view(-1, 14)
 
             graphs = generate_graph(batch_size, agents_features, agent_positions.view(-1, 2), None,
                                     self.n_agents, self.device)
@@ -172,17 +193,15 @@ class SimpleSpreadObjectiveMatchingGNN(Model):
             h2 = F.relu(self.matching_gnn(x=graphs.x, edge_index=graphs.edge_index, edge_attr=graphs.edge_attr))
 
             # perform global pool
-            h1 = torch_geometric.nn.global_add_pool(h1, graphs.batch)
-            h2 = torch_geometric.nn.global_add_pool(h2, graphs.batch)
+            objective_pooling = torch_geometric.nn.global_add_pool(h1, graphs.batch)
+            agent_pooling = torch_geometric.nn.global_add_pool(h2, graphs.batch)
 
-            # Get cosine similarity between agent and objective graph
-            cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
-            agent_objective_similarity = cos(h1, h2)
+            distance, c_rew = contrastive_reward(objective_pooling.unsqueeze(1).repeat(1, self.n_agents, 1), agent_pooling.unsqueeze(1).repeat(1, self.n_agents, 1))
 
             # Concatenate the agent-objective similarity to the agent-objective graph
-            agent_final_obs = torch.cat([h1.unsqueeze(1).repeat(1, self.n_agents, 1),
-                                         h2.unsqueeze(1).repeat(1, self.n_agents, 1),
-                                         agent_objective_similarity.unsqueeze(1).unsqueeze(2).repeat(1, self.n_agents, 1),
+            agent_final_obs = torch.cat([agent_pooling.unsqueeze(1).repeat(1, self.n_agents, 1),
+                                         objective_pooling.unsqueeze(1).repeat(1, self.n_agents, 1),
+                                         distance,
                                          agents_features.view(-1, self.n_agents, 14)
                                          ], dim=2)
 
@@ -192,7 +211,11 @@ class SimpleSpreadObjectiveMatchingGNN(Model):
 
             res = F.relu(self.final_mlp.forward(agent_final_obs.reshape(batch_size, self.n_agents, -1)))
 
-        tensordict.set(self.out_key, res)
+        tensordict.set(self.out_keys[0], res)
+        tensordict.set(self.out_keys[1], agent_pooling.unsqueeze(1).repeat(1, self.n_agents, 1))
+        tensordict.set(self.out_keys[2], objective_pooling.unsqueeze(1).repeat(1, self.n_agents, 1))
+        tensordict.set(self.out_keys[3], c_rew)
+        tensordict.set(self.out_keys[4], distance)
         return tensordict
 
 

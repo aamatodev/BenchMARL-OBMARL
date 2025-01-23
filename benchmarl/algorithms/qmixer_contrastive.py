@@ -383,12 +383,18 @@ class QMixerLossContrastive(LossModule):
         )
 
         ## Contrastive loss
-        sim_loss = similarity_loss(
-            td_copy["agents"]["agent_embedding"],
-            td_copy["agents"]["objective_embedding"],
-            td_copy["agents"]["similarity_score"],
-        )
+        # sim_loss = similarity_loss(
+        #     td_copy["agents"]["agent_embedding"],
+        #     td_copy["agents"]["objective_embedding"],
+        #     td_copy["agents"]["similarity_score"],
+        # )
+
         loss = distance_loss(pred_val_index, target_value, self.loss_function)
+
+        loss_mse = nn.MSELoss()
+        sim_loss = loss_mse(tensordict["agents"]["distance"], torch.zeros(tensordict["agents"]["distance"].shape).to(tensordict["agents"]["distance"].device))
+
+
         final_loss = loss + 0.5 * sim_loss
         return TensorDict({"loss": final_loss.mean()}, [])
 

@@ -506,7 +506,7 @@ class DisperseObjectiveMatchingGNN(Model):
 
             agent_final_obs = torch.cat([
                 # h1.view(batch_size, 4, -1),
-                ids,
+                 ids,
                 current_merged_rep_encoding,
                 objective_merged_rep_encoding,
                 agent_agent.view(batch_size, 4, -1),
