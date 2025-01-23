@@ -171,14 +171,23 @@ class MasacContrastive(Algorithm):
 
         actor_output_spec = Composite(
             {
+                # group: Composite(
+                #     {"logits": Unbounded(shape=logits_shape),
+                #      "i_rew": Unbounded(shape=[4, 1]),
+                #      "positive_merged_rep_encoding": Unbounded(shape=[4, 32]),
+                #      "negative_merged_rep_encoding": Unbounded(shape=[4, 32]),
+                #      "current_merged_rep_encoding": Unbounded(shape=[4, 32]),
+                #      "objective_merged_rep_encoding": Unbounded(shape=[4, 32])},
+                #      # "target_enc": Unbounded(shape=[4, 32])},
+                #     shape=(n_agents,),
+                # )
+
                 group: Composite(
                     {"logits": Unbounded(shape=logits_shape),
-                     "i_rew": Unbounded(shape=[4, 1]),
-                     "positive_merged_rep_encoding": Unbounded(shape=[4, 32]),
-                     "negative_merged_rep_encoding": Unbounded(shape=[4, 32]),
-                     "current_merged_rep_encoding": Unbounded(shape=[4, 32]),
-                     "objective_merged_rep_encoding": Unbounded(shape=[4, 32])},
-                     # "target_enc": Unbounded(shape=[4, 32])},
+                     "agent_embedding": Unbounded(shape=[n_agents, 32]),
+                     "objective_embedding": Unbounded(shape=[n_agents, 32]),
+                     "c_rew": Unbounded(shape=[n_agents, 1]),
+                     "distance": Unbounded(shape=[n_agents, 1])},
                     shape=(n_agents,),
                 )
             }
