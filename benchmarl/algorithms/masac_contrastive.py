@@ -184,10 +184,12 @@ class MasacContrastive(Algorithm):
 
                 group: Composite(
                     {"logits": Unbounded(shape=logits_shape),
-                     "agent_embedding": Unbounded(shape=[n_agents, 32]),
-                     "objective_embedding": Unbounded(shape=[n_agents, 32]),
+                     "current_merged_rep_encoding": Unbounded(shape=[n_agents, 32]),
+                     "positive_merged_rep_encoding": Unbounded(shape=[n_agents, 32]),
+                     "negative_merged_rep_encoding": Unbounded(shape=[n_agents, 32]),
                      "c_rew": Unbounded(shape=[n_agents, 1]),
-                     "distance": Unbounded(shape=[n_agents, 1])},
+                     "distance": Unbounded(shape=[n_agents, 1]),
+                     "labels": Unbounded(shape=[n_agents, 1])},
                     shape=(n_agents,),
                 )
             }

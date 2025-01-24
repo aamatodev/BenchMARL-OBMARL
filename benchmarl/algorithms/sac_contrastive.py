@@ -53,8 +53,9 @@ def similarity_loss(predicted_similarity, true_similarity):
 
 
 def contrastive_loss(current_state_embeddings,
-                     positive_embeddings,
-                     negative_embeddings,
+                     similar_embeddings,
+                     dissimilar_embeddings,
+                     labels,
                      margin=0.5):
     """
     Computes the contrastive loss.
@@ -68,22 +69,26 @@ def contrastive_loss(current_state_embeddings,
     Returns:
         torch.Tensor: The computed contrastive loss.
     """
-    # Normalize embeddings to ensure cosine similarity in [-1, 1]
-    current_state_norm = F.normalize(current_state_embeddings, p=2, dim=0)
-    positive_norm = F.normalize(positive_embeddings, p=2, dim=0)
-    negative_norm = F.normalize(negative_embeddings, p=2, dim=0)
 
-    # Compute cosine similarity
-    positive_similarity = torch.sum(current_state_norm * positive_norm, dim=-1)  # Shape: (batch_size,)
-    negative_similarity = torch.sum(current_state_norm * negative_norm, dim=-1)  # Shape: (batch_size,)
+    labels = labels[:, 1, :]
+    current_state_embeddings = current_state_embeddings[:, 1, :]
+    similar_embeddings = similar_embeddings[:, 1, :]  # (1, batch_size, embedding_dim)
+    dissimilar_embeddings = dissimilar_embeddings[:, 1, :]  # (1, batch_size, embedding_dim)
 
-    # Contrastive loss
-    positive_loss = -torch.log(torch.sigmoid(positive_similarity))  # Encourage similarity
-    negative_loss = -torch.log(torch.sigmoid(margin - negative_similarity))  # Encourage dissimilarity
+    pos_dist = F.pairwise_distance(current_state_embeddings, similar_embeddings, p=2)  # ||z_a - z_p||_2
+    neg_dist = F.pairwise_distance(current_state_embeddings, dissimilar_embeddings, p=2)  # ||z_a - z_n||_2
 
-    # Total loss
-    loss = positive_loss.mean() + negative_loss.mean()
-    return loss
+    # Adjust distances based on labels
+    # If label == 1: Treat as standard triplet (anchor closer to positive)
+    # If label == 0: Reverse the role of positive and negative
+
+    loss = torch.where(
+        labels == 1,
+        torch.relu(pos_dist - neg_dist + margin),
+        torch.relu(neg_dist - pos_dist + margin)  # Swap positive/negative
+    )
+
+    return loss.mean()
 
 
 def compute_log_prob(action_dist, action_or_tensordict, tensor_key):
@@ -1201,20 +1206,21 @@ class DiscreteSACLossContrastive(LossModule):
                 f"Losses shape mismatch: {loss_actor.shape}, and {loss_value.shape}"
             )
 
-        # loss_contrastive = contrastive_loss(
-        #     tensordict["agents"]["current_merged_rep_encoding"],
-        #     tensordict["agents"]["positive_merged_rep_encoding"],
-        #     tensordict["agents"]["negative_merged_rep_encoding"],
-        # )
+        loss_contrastive = contrastive_loss(
+            tensordict["agents"]["current_merged_rep_encoding"],
+            tensordict["agents"]["positive_merged_rep_encoding"],
+            tensordict["agents"]["negative_merged_rep_encoding"],
+            tensordict["agents"]["labels"]
+        )
 
-        loss = nn.MSELoss()
-        sim_loss = loss(tensordict["agents"]["distance"], torch.zeros(tensordict["agents"]["distance"].shape).to(tensordict["agents"]["distance"].device))
+        # loss = nn.MSELoss()
+        # sim_loss = loss(tensordict["agents"]["distance"], torch.zeros(tensordict["agents"]["distance"].shape).to(tensordict["agents"]["distance"].device))
 
         entropy = -metadata_actor["log_prob"]
         out = {
-            "loss_actor": loss_actor + sim_loss,
+            "loss_actor": loss_actor + loss_contrastive,
             "loss_qvalue": loss_value,
-            "contrastive_loss": sim_loss,
+            "contrastive_loss": loss_contrastive,
             "loss_alpha": loss_alpha,
             "alpha": self._alpha,
             "entropy": entropy.detach().mean(),
