@@ -345,11 +345,6 @@ class SimpleSpreadObjectiveMatchingGNN(Model):
             objective_pooling = torch_geometric.nn.global_add_pool(h1, graphs.batch)
             agent_pooling = torch_geometric.nn.global_add_pool(h2, graphs.batch)
 
-            labels, distance, c_rew = contrastive_reward(agent_positions,
-                                                         single_landmark_positions.view(batch_size, self.n_agents, 2),
-                                                         objective_pooling.unsqueeze(1).repeat(1, self.n_agents, 1),
-                                                         agent_pooling.unsqueeze(1).repeat(1, self.n_agents, 1))
-
             # sample positive examples
             positive_data = self.positive_obs_buffer.sample(batch_size)
             positive_agent_pos = positive_data.get("node_pos").to(self.device)
@@ -416,9 +411,14 @@ class SimpleSpreadObjectiveMatchingGNN(Model):
             current_merged_rep_encoding = self.graphs_encoder(current_merged_rep.unsqueeze(1).repeat(1, self.n_agents, 1))
             objective_merged_rep_encoding = self.graphs_encoder(objective_merged_rep.unsqueeze(1).repeat(1, self.n_agents, 1))
 
+            labels, distance, c_rew = contrastive_reward(agent_positions,
+                                                         single_landmark_positions.view(batch_size, self.n_agents, 2),
+                                                         current_merged_rep_encoding,
+                                                         objective_merged_rep_encoding)
+
             # Concatenate the agent-objective similarity to the agent-objective graph
-            agent_final_obs = torch.cat([agent_pooling.unsqueeze(1).repeat(1, self.n_agents, 1),
-                                         objective_pooling.unsqueeze(1).repeat(1, self.n_agents, 1),
+            agent_final_obs = torch.cat([current_merged_rep_encoding,
+                                         objective_merged_rep_encoding,
                                          distance,
                                          agents_features.view(-1, self.n_agents, 14)
                                          ], dim=2)
