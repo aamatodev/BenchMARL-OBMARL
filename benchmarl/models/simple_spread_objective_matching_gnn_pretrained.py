@@ -165,6 +165,11 @@ class SimpleSpreadObjectiveMatchingGNNPreTrained(Model):
             num_cells=[32, 32],
         )
 
+        self.graph_encoder = SCLModel(self.device).to(device=self.device)
+        self.graph_encoder.load_state_dict(
+            torch.load("/home/aamato/Documents/marl/objective-based-marl/contrastive_learning/model_full_dict.pth"))
+        self.graph_encoder.eval()
+
     def _perform_checks(self):
         super()._perform_checks()
 
@@ -173,12 +178,9 @@ class SimpleSpreadObjectiveMatchingGNNPreTrained(Model):
         if self.input_has_agent_dim:
             batch_size = tensordict.get("agents")["observation"]["agent_pos"].shape[:-2][0]
             # load the pre-trained model
-            graph_encoder = SCLModel(self.device).to(device=self.device)
-            graph_encoder.load_state_dict(
-                torch.load("/home/aamato/Documents/marl/objective-based-marl/contrastive_learning/model_full_dict.pth"))
-            graph_encoder.eval()
 
-            agent_graph_encoding = graph_encoder(tensordict.get("agents")["observation"])
+            with torch.no_grad():
+                agent_graph_encoding = self.graph_encoder(tensordict.get("agents")["observation"])
 
             # set the agent pos to objective pos for the objective graph
 
@@ -208,7 +210,8 @@ class SimpleSpreadObjectiveMatchingGNNPreTrained(Model):
             obs["relative_landmark_pos"] = relative_env_landmarks
             obs["other_pos"] = relative_other_positions.view(batch_size, 3, 4)
 
-            objective_graph_encoding = graph_encoder(obs)
+            with torch.no_grad():
+                objective_graph_encoding = self.graph_encoder(obs)
 
             distance, c_rew = contrastive_reward([],
                                                          single_landmark_positions.view(batch_size, self.n_agents, 2),
