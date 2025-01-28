@@ -1220,7 +1220,7 @@ class DiscreteSACLossContrastive(LossModule):
         out = {
             "loss_actor": loss_actor,
             "loss_qvalue": loss_value,
-            # "contrastive_loss": loss_contrastive,
+            "distance": tensordict["agents"]["distance"].mean(),
             "loss_alpha": loss_alpha,
             "alpha": self._alpha,
             "entropy": entropy.detach().mean(),

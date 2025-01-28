@@ -16,7 +16,7 @@ from torchrl.data import Composite, Unbounded, ReplayBuffer, LazyTensorStorage
 
 from contrastive_learning.model.model import SCLModel
 from tensordict import TensorDictBase, TensorDict
-from torch import nn
+from torch import nn, cosine_similarity
 from torchrl.modules import MLP, MultiAgentMLP
 
 import torch.nn.functional as F
@@ -39,7 +39,7 @@ def graph_distance(objective_node_features, agent_node_features):
     return torch.stack(graph_dist)
 
 
-def contrastive_reward(node_pos, landmark_pos, embedding_a, embedding_b, margin=2):
+def contrastive_reward(embedding_a, embedding_b, margin=2):
     """
     Calculate the reward based on contrastive loss-inspired function.
 
@@ -53,12 +53,15 @@ def contrastive_reward(node_pos, landmark_pos, embedding_a, embedding_b, margin=
     """
 
     # Compute the squared Euclidean distance between the embeddings
-    distance = torch.cdist(embedding_a, embedding_b, p=2)[:, 1].unsqueeze(1).unsqueeze(2).repeat(1, 3, 1)
+
+    cos = cosine_similarity(embedding_a, embedding_b).unsqueeze(1).unsqueeze(2).repeat(1, 3, 1)
+
+    # distance = torch.cdist(embedding_a, embedding_b, p=2)[:, 1].unsqueeze(1).unsqueeze(2).repeat(1, 3, 1)
 
     # Calculate the reward using the margin-based function
-    reward = torch.max(torch.zeros(distance.shape).to(distance.device), margin - distance)
+    # reward = torch.max(torch.zeros(distance.shape).to(distance.device), margin - distance)
 
-    return distance, reward
+    return cos, 0
 
 
 def generate_graph(batch_size, node_features, node_pos, edge_attr, n_agents, device, use_radius=False, bc=1):
@@ -167,7 +170,7 @@ class SimpleSpreadObjectiveMatchingGNNPreTrained(Model):
 
         self.graph_encoder = SCLModel(self.device).to(device=self.device)
         self.graph_encoder.load_state_dict(
-            torch.load("/home/aamato/Documents/marl/objective-based-marl/contrastive_learning/model_full_dict.pth"))
+            torch.load("/home/aamato/Documents/marl/objective-based-marl/contrastive_learning/model_full_dict_large.pth"))
         self.graph_encoder.eval()
 
     def _perform_checks(self):
@@ -213,10 +216,7 @@ class SimpleSpreadObjectiveMatchingGNNPreTrained(Model):
             with torch.no_grad():
                 objective_graph_encoding = self.graph_encoder(obs)
 
-            distance, c_rew = contrastive_reward([],
-                                                         single_landmark_positions.view(batch_size, self.n_agents, 2),
-                                                         agent_graph_encoding,
-                                                         objective_graph_encoding)
+            distance, c_rew = contrastive_reward(agent_graph_encoding, objective_graph_encoding)
 
 
             agent_positions = tensordict.get("agents")["observation"]["agent_pos"]
@@ -244,7 +244,7 @@ class SimpleSpreadObjectiveMatchingGNNPreTrained(Model):
         # tensordict.set(self.out_keys[1], agent_graph_encoding)
         # tensordict.set(self.out_keys[2], objective_graph_encoding)
         # tensordict.set(self.out_keys[3], c_rew)
-        # tensordict.set(self.out_keys[4], distance)
+        tensordict.set(self.out_keys[5], distance)
         # tensordict.set(self.out_keys[5], labels.unsqueeze(1).unsqueeze(2).repeat(1, self.n_agents, 1))
 
         return tensordict
