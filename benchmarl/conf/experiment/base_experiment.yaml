@@ -19,16 +19,16 @@ collect_with_grad: False
 # Discount factor
 gamma: 0.9
 # Learning rate
-lr: 0.0003
+lr: 0.00005
 # The epsilon parameter of the adam optimizer
-adam_eps: 0.00001
+adam_eps: 0.000001
 # Clips grad norm if true and clips grad value if false
 clip_grad_norm: True
 # The value for the clipping, if null no clipping
 clip_grad_val: 5
 
 # Whether to use soft or hard target updates
-soft_target_update: False
+soft_target_update: True
 # If soft_target_update is True, this is its polyak_tau
 polyak_tau: 0.005
 # If soft_target_update is False, this is the frequency of the hard trarget updates in terms of n_optimizer_steps

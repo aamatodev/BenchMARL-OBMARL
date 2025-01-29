@@ -170,7 +170,7 @@ class SimpleSpreadObjectiveMatchingGNNPreTrained(Model):
 
         self.graph_encoder = SCLModel(self.device).to(device=self.device)
         self.graph_encoder.load_state_dict(
-            torch.load("/home/aamato/Documents/marl/objective-based-marl/contrastive_learning/model_full_dict_large.pth"))
+            torch.load("./contrastive_learning/model_full_dict_large.pth"))
         self.graph_encoder.eval()
 
     def _perform_checks(self):
