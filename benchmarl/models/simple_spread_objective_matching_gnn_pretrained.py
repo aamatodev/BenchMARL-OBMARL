@@ -209,7 +209,7 @@ class SimpleSpreadObjectiveMatchingGNNPreTrained(Model):
             obs["agent_pos"] = landmark_positions[:, :1, :].view(-1, 3, 2)
             obs["landmark_pos"] = tensordict.get("agents")["observation"]["landmark_pos"]
 
-            obs["agent_vel"] = tensordict.get("agents")["observation"]["agent_vel"]
+            obs["agent_vel"] = objective_vel.view(batch_size, 3, 2)
             obs["relative_landmark_pos"] = relative_env_landmarks
             obs["other_pos"] = relative_other_positions.view(batch_size, 3, 4)
 
