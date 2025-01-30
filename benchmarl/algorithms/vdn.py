@@ -12,7 +12,7 @@ from tensordict.nn import TensorDictModule, TensorDictSequential
 from torchrl.data import Composite, Unbounded
 from torchrl.modules import EGreedyModule, QValueModule, VDNMixer
 from torchrl.objectives import LossModule, QMixerLoss, ValueEstimators
-from benchmarl.algorithms.qmixer_contrastive import QMixerLossContrastive
+
 
 from benchmarl.algorithms.common import Algorithm, AlgorithmConfig
 from benchmarl.models.common import ModelConfig
@@ -45,7 +45,7 @@ class Vdn(Algorithm):
             raise NotImplementedError("Vdn is not compatible with continuous actions.")
         else:
             # Loss
-            loss_module = QMixerLossContrastive(
+            loss_module = QMixerLoss(
                 policy_for_loss,
                 self.get_mixer(group),
                 delay_value=self.delay_value,

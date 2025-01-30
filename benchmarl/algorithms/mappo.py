@@ -129,7 +129,8 @@ class Mappo(Algorithm):
         actor_output_spec = Composite(
             {
                 group: Composite(
-                    {"logits": Unbounded(shape=logits_shape)},
+                    {"logits": Unbounded(shape=logits_shape),
+                    "distance": Unbounded(shape=logits_shape)},
                     shape=(n_agents,),
                 )
             }

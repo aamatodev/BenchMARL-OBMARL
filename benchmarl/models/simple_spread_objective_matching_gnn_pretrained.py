@@ -218,7 +218,6 @@ class SimpleSpreadObjectiveMatchingGNNPreTrained(Model):
 
             distance, c_rew = contrastive_reward(agent_graph_encoding, objective_graph_encoding)
 
-
             agent_positions = tensordict.get("agents")["observation"]["agent_pos"]
             agent_velocities = tensordict.get("agents")["observation"]["agent_vel"]
             other_pos = tensordict.get("agents")["observation"]["other_pos"]
@@ -229,7 +228,6 @@ class SimpleSpreadObjectiveMatchingGNNPreTrained(Model):
                                          agent_velocities,
                                          relative_landmarks,
                                          other_pos], dim=2).view(-1, 14)
-
 
             # Concatenate the agent-objective similarity to the agent-objective graph
             agent_final_obs = torch.cat([agent_graph_encoding.unsqueeze(1).repeat(1, self.n_agents, 1),
@@ -244,7 +242,7 @@ class SimpleSpreadObjectiveMatchingGNNPreTrained(Model):
         # tensordict.set(self.out_keys[1], agent_graph_encoding)
         # tensordict.set(self.out_keys[2], objective_graph_encoding)
         # tensordict.set(self.out_keys[3], c_rew)
-        tensordict.set(self.out_keys[5], distance)
+        tensordict.set(self.out_keys[1], distance)
         # tensordict.set(self.out_keys[5], labels.unsqueeze(1).unsqueeze(2).repeat(1, self.n_agents, 1))
 
         return tensordict
