@@ -17,11 +17,11 @@ prefer_continuous_actions: False
 collect_with_grad: False
 
 # Discount factor
-gamma: 0.9
+gamma: 0.99
 # Learning rate
-lr: 0.0007
+lr: 0.00005
 # The epsilon parameter of the adam optimizer
-adam_eps: 0.00001
+adam_eps: 0.000001
 # Clips grad norm if true and clips grad value if false
 clip_grad_norm: True
 # The value for the clipping, if null no clipping
