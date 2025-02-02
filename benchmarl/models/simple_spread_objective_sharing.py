@@ -217,10 +217,9 @@ class SimpleSpreadObjectiveSharing(Model):
                                                                    final_graph.edge_index,
                                                                    final_graph.edge_attr).view(batch_size, self.n_agents * 2, -1)[:, :3, :]
 
-            res = F.relu(self.final_mlp.forward(h_agents_objective_graph))
+            res = self.final_mlp.forward(h_agents_objective_graph)
 
-        tensordict.set(self.out_keys[0], res)
-
+        tensordict.set(self.out_key, res)
         return tensordict
 
 
