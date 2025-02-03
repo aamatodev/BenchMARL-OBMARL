@@ -19,7 +19,6 @@ from torchrl.modules import (
 )
 from torchrl.objectives import DiscreteSACLoss, LossModule, SACLoss, ValueEstimators
 
-from benchmarl.algorithms.sac_contrastive import DiscreteSACLossContrastive
 from benchmarl.algorithms.common import Algorithm, AlgorithmConfig
 from benchmarl.models.common import ModelConfig
 
@@ -113,7 +112,7 @@ class Masac(Algorithm):
             )
 
         else:
-            loss_module = DiscreteSACLossContrastive(
+            loss_module = DiscreteSACLoss(
                 actor_network=policy_for_loss,
                 qvalue_network=self.get_discrete_value_module(group),
                 num_qvalue_nets=self.num_qvalue_nets,
