@@ -89,7 +89,7 @@ def generate_objective_node_features(landmark_pos):
     # in simple spread, the objective is reached once all the landmarks are covered. This happens when the agents
     # positions are equals to the landmarks positions
     n_landmark = landmark_pos.shape[1]
-    objective_pos = landmark_pos[:, 1, :].view(-1, n_landmark, 2)
+    objective_pos = landmark_pos[:, 1, :].view(-1, n_landmark, 2).clone().detach()
     objective_vel = torch.zeros_like(objective_pos)
 
     relative_landmarks_pos = landmark_pos - objective_pos.repeat(1, 1, n_landmark)
@@ -175,7 +175,7 @@ class SimpleSpreadObjectiveSharing(Model):
 
             objective_graph = generate_graph(batch_size=batch_size,
                                              node_features=h_objective,
-                                             node_pos=objective_pos.contiguous().view(batch_size * self.n_agents, -1),
+                                             node_pos=objective_pos.view(batch_size * self.n_agents, -1),
                                              edge_attr=None,
                                              n_agents=self.n_agents,
                                              device=self.device)
