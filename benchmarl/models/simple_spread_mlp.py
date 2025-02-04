@@ -50,10 +50,7 @@ class SimpleSpreadMlp(Model):
             is_critic=kwargs.pop("is_critic"),
         )
 
-        self.in_keys = [('agents', 'observation', 'agent_pos'), ('agents', 'observation', 'agent_vel'),
-                        ('agents', 'observation', 'relative_landmark_pos'), ('agents', 'observation', 'other_pos')]
-
-        self.input_features = 14
+        self.input_features = 16
         self.output_features = self.output_leaf_spec.shape[-1]
 
         if self.input_has_agent_dim:
@@ -116,7 +113,8 @@ class SimpleSpreadMlp(Model):
     def _forward(self, tensordict: TensorDictBase) -> TensorDictBase:
         # Gather in_key: for disperse we just get [agent_pos, agent_vel, relative_landmark_pos]
         self.in_keys =  [('agents', 'observation', 'agent_pos'), ('agents', 'observation', 'agent_vel'),
-                        ('agents', 'observation', 'relative_landmark_pos'), ('agents', 'observation', 'other_pos')]
+                        ('agents', 'observation', 'relative_landmark_pos'), ('agents', 'observation', 'other_pos'), ('agents', 'action')]
+
         input = torch.cat([tensordict.get(in_key) for in_key in self.in_keys], dim=-1)
 
         # Has multi-agent input dimension
