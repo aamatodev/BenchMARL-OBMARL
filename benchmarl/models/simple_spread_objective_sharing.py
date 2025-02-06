@@ -186,8 +186,8 @@ class SimpleSpreadObjectiveSharing(Model):
                                                           objective_graph.edge_attr)
 
             # aggregate graphs with pooling
-            h_agents_graph_mean_pooling = torch_geometric.nn.global_add_pool(h_agents_graph, agents_graph.batch)
-            h_objective_graph_mean_pooling = torch_geometric.nn.global_add_pool(h_objective_graph,
+            h_agents_graph_add_pooling = torch_geometric.nn.global_add_pool(h_agents_graph, agents_graph.batch)
+            h_objective_graph_add_pooling = torch_geometric.nn.global_add_pool(h_objective_graph,
                                                                                 objective_graph.batch)
 
             # create agents - objective node features
@@ -198,8 +198,8 @@ class SimpleSpreadObjectiveSharing(Model):
             agents_objective_pos = torch.cat([agents_pos, objective_pos], dim=1)
 
             agents_objective_features = torch.cat(
-                [h_agents_graph_mean_pooling.unsqueeze(1).repeat(1, 6, 1),
-                 h_objective_graph_mean_pooling.unsqueeze(1).repeat(1, 6, 1),
+                [h_agents_graph_add_pooling.unsqueeze(1).repeat(1, 6, 1),
+                 h_objective_graph_add_pooling.unsqueeze(1).repeat(1, 6, 1),
                  agents_objective], dim=2)
 
             # encode agents - objective node features
