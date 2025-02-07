@@ -43,17 +43,17 @@ class Ippo(Algorithm):
     """
 
     def __init__(
-        self,
-        share_param_critic: bool,
-        clip_epsilon: float,
-        entropy_coef: bool,
-        critic_coef: float,
-        loss_critic_type: str,
-        lmbda: float,
-        scale_mapping: str,
-        use_tanh_normal: bool,
-        minibatch_advantage: bool,
-        **kwargs
+            self,
+            share_param_critic: bool,
+            clip_epsilon: float,
+            entropy_coef: bool,
+            critic_coef: float,
+            loss_critic_type: str,
+            lmbda: float,
+            scale_mapping: str,
+            use_tanh_normal: bool,
+            minibatch_advantage: bool,
+            **kwargs
     ):
         super().__init__(**kwargs)
 
@@ -72,7 +72,7 @@ class Ippo(Algorithm):
     #############################
 
     def _get_loss(
-        self, group: str, policy_for_loss: TensorDictModule, continuous: bool
+            self, group: str, policy_for_loss: TensorDictModule, continuous: bool
     ) -> Tuple[LossModule, bool]:
         # Loss
         loss_module = ClipPPOLoss(
@@ -106,7 +106,7 @@ class Ippo(Algorithm):
         }
 
     def _get_policy_for_loss(
-        self, group: str, model_config: ModelConfig, continuous: bool
+            self, group: str, model_config: ModelConfig, continuous: bool
     ) -> TensorDictModule:
         n_agents = len(self.group_map[group])
         if continuous:
@@ -125,7 +125,8 @@ class Ippo(Algorithm):
         actor_output_spec = Composite(
             {
                 group: Composite(
-                    {"logits": Unbounded(shape=logits_shape)},
+                    {"logits": Unbounded(shape=logits_shape),
+                     "distance": Unbounded(shape=[n_agents, 1])},
                     shape=(n_agents,),
                 )
             }
@@ -196,7 +197,7 @@ class Ippo(Algorithm):
         return policy
 
     def _get_policy_for_collection(
-        self, policy_for_loss: TensorDictModule, group: str, continuous: bool
+            self, policy_for_loss: TensorDictModule, group: str, continuous: bool
     ) -> TensorDictModule:
         # IPPO uses the same stochastic actor for collection
         return policy_for_loss
@@ -231,8 +232,8 @@ class Ippo(Algorithm):
         loss = self.get_loss_and_updater(group)[0]
         if self.minibatch_advantage:
             increment = -(
-                -self.experiment.config.train_minibatch_size(self.on_policy)
-                // batch.shape[1]
+                    -self.experiment.config.train_minibatch_size(self.on_policy)
+                    // batch.shape[1]
             )
         else:
             increment = batch.batch_size[0] + 1
@@ -255,7 +256,7 @@ class Ippo(Algorithm):
         return batch
 
     def process_loss_vals(
-        self, group: str, loss_vals: TensorDictBase
+            self, group: str, loss_vals: TensorDictBase
     ) -> TensorDictBase:
         loss_vals.set(
             "loss_objective", loss_vals["loss_objective"] + loss_vals["loss_entropy"]
