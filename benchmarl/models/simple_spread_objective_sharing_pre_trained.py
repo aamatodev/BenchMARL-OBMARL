@@ -122,13 +122,14 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
 
         self.output_features = self.output_leaf_spec.shape[-1]
 
+        self.raw_feature_encoder = Encoder(14, 128).to(self.device)
         self.node_feature_encoder = Encoder(277, 128).to(self.device)
-        self.node_feature_encoder_2 = Encoder(512 * 3, 512).to(self.device)
-        self.matching_gnn = GATv2Conv(128, 128, 4, edge_dim=3).to(self.device)
-        self.matching_gnn_2 = GATv2Conv(512, 128, 4, edge_dim=3).to(self.device)
+
+        self.agents_entity_gnn = GATv2Conv(128, 128, 2, edge_dim=3).to(self.device)
+        self.agents_agents_gnn = GATv2Conv(256, 128, 2, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=512,
+            n_agent_inputs=515,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -176,56 +177,75 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
             distance = torch.pairwise_distance(h_agent_graph_metric, h_objective_graph_encoding,
                                                keepdim=True).unsqueeze(1).repeat(1, self.n_agents, 1)
 
+            # create agent - entity graph
+            # cat one agent with the 3 entities
+
+            agents_features = torch.cat([
+                agents_pos,
+                agents_vel,
+                relative_landmarks_pos,
+                relative_other_pos], dim=2).view(batch_size, 3, 1, -1)
+
+            objective_features = torch.cat([
+                objective_pos,
+                objective_vel,
+                objective_relative_landmarks_pos,
+                objective_relative_other_pos], dim=2).view(batch_size, 1, 3, -1).expand(-1, 3, -1, -1)
+
+            final_tensor = torch.cat((agents_features, objective_features), dim=2).view(batch_size * self.n_agents, 4,
+                                                                                        -1)
+
+            # agents - entity positions
+            agents_pos_extended = agents_pos.view(batch_size, 3, 1, -1)
+            objective_pos_extended = objective_pos.view(batch_size, 1, self.n_agents, 2).expand(-1, self.n_agents, -1,
+                                                                                                -1)
+
+            agents_entity_pos_unrolled = torch.cat([agents_pos_extended, objective_pos_extended], dim=2).view(-1, 2)
+
+            h_agents_entity_features_unrolled = self.raw_feature_encoder.forward(final_tensor.view(-1, 14)).view(-1,
+                                                                                                                 128)
+
+            agents_entity_graph = generate_graph(batch_size=batch_size * self.n_agents,
+                                                 node_features=h_agents_entity_features_unrolled,
+                                                 node_pos=agents_entity_pos_unrolled,
+                                                 edge_attr=None,
+                                                 n_agents=self.n_agents + 1,
+                                                 device=self.device)
+
+            h_agents_entity_graph = self.agents_entity_gnn.forward(agents_entity_graph.x,
+                                                                   agents_entity_graph.edge_index,
+                                                                   agents_entity_graph.edge_attr).view(
+                batch_size * self.n_agents, self.n_agents + 1, -1)
+            h_only_agents = h_agents_entity_graph[:, 0, :]
+
+            # now create the graph only with the agents
+            h_only_agents_unrolled = h_only_agents.view(-1, 256)
+            agents_pos_unrolled = agents_pos.view(-1, 2)
+
+            agents_graph = generate_graph(batch_size=batch_size,
+                                          node_features=h_only_agents_unrolled,
+                                          node_pos=agents_pos_unrolled,
+                                          edge_attr=None,
+                                          n_agents=self.n_agents,
+                                          device=self.device)
+
+            h_agents_graph = self.agents_agents_gnn.forward(agents_graph.x,
+                                                            agents_graph.edge_index,
+                                                            agents_graph.edge_attr).view(batch_size, self.n_agents, -1)
+
             agents_final_features = torch.cat(
                 [
                     h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
                     h_objective_graph_encoding.unsqueeze(1).repeat(1, self.n_agents, 1),
                     distance,
                     agents_pos,
-                    agents_vel,
-                    landmark_pos,
-                    relative_landmarks_pos,
-                    relative_other_pos
+                    h_agents_graph
                 ], dim=2)
 
-            objective_features = torch.cat(
-                [
-                    h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
-                    h_objective_graph_encoding.unsqueeze(1).repeat(1, self.n_agents, 1),
-                    distance,
-                    objective_pos.view(-1, 3, 2),
-                    objective_vel.view(batch_size, 3, 2),
-                    landmark_pos,
-                    objective_relative_landmarks_pos,
-                    objective_relative_other_pos
-                ], dim=2)
-
-            h_agents_final_features = self.node_feature_encoder.forward(agents_final_features)
-            h_objective_features = self.node_feature_encoder.forward(objective_features)
-
-            global_graph_features_unrolled = torch.cat([h_agents_final_features, h_objective_features], dim=1).view(
-                batch_size * self.n_agents * 2, -1)
-            global_graph_positions_unrolled = torch.cat([agents_pos, objective_pos.view(-1, 3, 2)], dim=1).view(
-                batch_size * self.n_agents * 2, -1)
-
-            final_graph = generate_graph(batch_size=batch_size,
-                                         node_features=global_graph_features_unrolled,
-                                         node_pos=global_graph_positions_unrolled.view(batch_size * self.n_agents * 2,
-                                                                                       -1),
-                                         edge_attr=None,
-                                         n_agents=self.n_agents * 2,
-                                         device=self.device)
-
-            h_agents_objective_graph = self.matching_gnn.forward(final_graph.x,
-                                                                   final_graph.edge_index,
-                                                                   final_graph.edge_attr).view(batch_size,
-                                                                                               self.n_agents * 2, -1)[:,
-                                       :3, :]
-
-            res = self.final_mlp(h_agents_objective_graph.view(batch_size, 3, -1))
+            res = self.final_mlp(agents_final_features.view(batch_size, 3, -1))
 
         tensordict.set(self.out_keys[0], res)
-        tensordict.set(self.out_keys[1], -distance * 0.1)
+        tensordict.set(self.out_keys[1], -distance * 0.5)
         return tensordict
 
 
