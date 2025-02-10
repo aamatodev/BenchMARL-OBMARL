@@ -141,7 +141,7 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
 
         self.graph_encoder = SCLModel(self.device).to(device=self.device)
         self.graph_encoder.load_state_dict(
-            torch.load("./contrastive_learning/model_full_dict_large.pth"))
+            torch.load("./contrastive_learning/model_full_dict_large_100eps.pth"))
         self.graph_encoder.eval()
 
     def _perform_checks(self):
@@ -173,18 +173,20 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
             with torch.no_grad():
                 h_objective_graph_encoding = self.graph_encoder(obs)
 
-            distance = torch.pairwise_distance(h_agent_graph_metric, h_objective_graph_encoding, keepdim=True).unsqueeze(1).repeat(1, self.n_agents, 1)
+            distance = torch.pairwise_distance(h_agent_graph_metric, h_objective_graph_encoding,
+                                               keepdim=True).unsqueeze(1).repeat(1, self.n_agents, 1)
 
             agents_objective_features = torch.cat(
-                [h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
-                 h_objective_graph_encoding.unsqueeze(1).repeat(1, self.n_agents, 1),
-                 distance,
-                 agents_pos,
-                 agents_vel,
-                 landmark_pos,
-                 relative_landmarks_pos,
-                 relative_other_pos
-                 ], dim=2)
+                [
+                    h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
+                    h_objective_graph_encoding.unsqueeze(1).repeat(1, self.n_agents, 1),
+                    distance,
+                    agents_pos,
+                    agents_vel,
+                    landmark_pos,
+                    relative_landmarks_pos,
+                    relative_other_pos
+                ], dim=2)
 
             res = self.final_mlp.forward(agents_objective_features)
 
