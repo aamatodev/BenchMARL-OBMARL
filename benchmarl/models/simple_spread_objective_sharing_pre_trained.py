@@ -122,13 +122,13 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
 
         self.output_features = self.output_leaf_spec.shape[-1]
 
-        self.node_feature_encoder_1 = Encoder(14, 128).to(self.device)
+        self.node_feature_encoder = Encoder(277, 128).to(self.device)
         self.node_feature_encoder_2 = Encoder(512 * 3, 512).to(self.device)
         self.matching_gnn = GATv2Conv(128, 128, 4, edge_dim=3).to(self.device)
         self.matching_gnn_2 = GATv2Conv(512, 128, 4, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=277,
+            n_agent_inputs=512,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -136,7 +136,7 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
             device=self.device,
             activation_class=torch.nn.ReLU,
             depth=3,
-            num_cells=[128, 128, 32],
+            num_cells=[256, 128, 32],
         )
 
         self.graph_encoder = SCLModel(self.device).to(device=self.device)
@@ -176,7 +176,7 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
             distance = torch.pairwise_distance(h_agent_graph_metric, h_objective_graph_encoding,
                                                keepdim=True).unsqueeze(1).repeat(1, self.n_agents, 1)
 
-            agents_objective_features = torch.cat(
+            agents_final_features = torch.cat(
                 [
                     h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
                     h_objective_graph_encoding.unsqueeze(1).repeat(1, self.n_agents, 1),
@@ -188,10 +188,44 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
                     relative_other_pos
                 ], dim=2)
 
-            res = self.final_mlp.forward(agents_objective_features)
+            objective_features = torch.cat(
+                [
+                    h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
+                    h_objective_graph_encoding.unsqueeze(1).repeat(1, self.n_agents, 1),
+                    distance,
+                    objective_pos.view(-1, 3, 2),
+                    objective_vel.view(batch_size, 3, 2),
+                    landmark_pos,
+                    objective_relative_landmarks_pos,
+                    objective_relative_other_pos
+                ], dim=2)
+
+            h_agents_final_features = self.node_feature_encoder.forward(agents_final_features)
+            h_objective_features = self.node_feature_encoder.forward(objective_features)
+
+            global_graph_features_unrolled = torch.cat([h_agents_final_features, h_objective_features], dim=1).view(
+                batch_size * self.n_agents * 2, -1)
+            global_graph_positions_unrolled = torch.cat([agents_pos, objective_pos.view(-1, 3, 2)], dim=1).view(
+                batch_size * self.n_agents * 2, -1)
+
+            final_graph = generate_graph(batch_size=batch_size,
+                                         node_features=global_graph_features_unrolled,
+                                         node_pos=global_graph_positions_unrolled.view(batch_size * self.n_agents * 2,
+                                                                                       -1),
+                                         edge_attr=None,
+                                         n_agents=self.n_agents * 2,
+                                         device=self.device)
+
+            h_agents_objective_graph = self.matching_gnn.forward(final_graph.x,
+                                                                   final_graph.edge_index,
+                                                                   final_graph.edge_attr).view(batch_size,
+                                                                                               self.n_agents * 2, -1)[:,
+                                       :3, :]
+
+            res = self.final_mlp(h_agents_objective_graph.view(batch_size, 3, -1))
 
         tensordict.set(self.out_keys[0], res)
-        tensordict.set(self.out_keys[1], -distance)
+        tensordict.set(self.out_keys[1], -distance * 0.1)
         return tensordict
 
 
