@@ -94,7 +94,14 @@ def generate_objective_node_features(landmark_pos):
 
     relative_landmarks_pos = landmark_pos - objective_pos.repeat(1, 1, n_landmark)
 
-    relative_other_pos = relative_landmarks_pos[relative_landmarks_pos != 0].view(-1, n_landmark, (n_landmark - 1) * 2)
+    indices = torch.tensor([
+        [2, 3, 4, 5],  # Keep the last 4 elements for the first element
+        [0, 1, 4, 5],  # Keep the first two and last two elements for the second element
+        [0, 1, 2, 3],  # Keep the first four elements for the third element
+    ]).to(landmark_pos.device)
+    indices = indices.unsqueeze(0).expand(600, -1, -1)
+    # Use `gather` to apply the indexing along the last dimension
+    relative_other_pos = torch.gather(relative_landmarks_pos, 2, indices)
 
     return objective_pos, objective_vel, relative_landmarks_pos, relative_other_pos
 
