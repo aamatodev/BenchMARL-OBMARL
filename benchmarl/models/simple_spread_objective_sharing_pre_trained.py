@@ -99,7 +99,7 @@ def generate_objective_node_features(landmark_pos):
         [0, 1, 4, 5],  # Keep the first two and last two elements for the second element
         [0, 1, 2, 3],  # Keep the first four elements for the third element
     ]).to(landmark_pos.device)
-    indices = indices.unsqueeze(0).expand(600, -1, -1)
+    indices = indices.unsqueeze(0).expand(landmark_pos.shape[0], -1, -1)
     # Use `gather` to apply the indexing along the last dimension
     relative_other_pos = torch.gather(relative_landmarks_pos, 2, indices)
 
@@ -149,7 +149,7 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
 
         self.graph_encoder = SCLModel(self.device).to(device=self.device)
         self.graph_encoder.load_state_dict(
-            torch.load("./contrastive_learning/model_full_dict_large_100eps.pth"))
+            torch.load("./contrastive_learning/model_full_dict_large_60eps.pth"))
         self.graph_encoder.eval()
 
     def _perform_checks(self):
