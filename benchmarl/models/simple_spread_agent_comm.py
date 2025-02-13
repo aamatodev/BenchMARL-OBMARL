@@ -106,7 +106,7 @@ def generate_objective_node_features(landmark_pos):
     return objective_pos, objective_vel, relative_landmarks_pos, relative_other_pos
 
 
-class SimpleSpreadObjectiveSharingPreTrained(Model):
+class SimpleSpreadAgentComm(Model):
     def __init__(
             self,
             activation_class: Type[nn.Module],
@@ -139,7 +139,7 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
         self.agents_agents_gnn = GATv2Conv(256, 128, 2, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=515,
+            n_agent_inputs=256,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -149,11 +149,6 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
             depth=3,
             num_cells=[256, 128, 32],
         )
-
-        self.graph_encoder = SCLModel(self.device).to(device=self.device)
-        self.graph_encoder.load_state_dict(
-            torch.load("./contrastive_learning/model_full_dict_large_60eps.pth"))
-        self.graph_encoder.eval()
 
     def _perform_checks(self):
         super()._perform_checks()
@@ -169,23 +164,12 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
             objective_pos, objective_vel, objective_relative_landmarks_pos, objective_relative_other_pos = generate_objective_node_features(
                 landmark_pos)
 
-            with torch.no_grad():
-                h_agent_graph_metric = self.graph_encoder(tensordict.get("agents")["observation"])
-
-            # create obs for agents in objective position and objective
-
             obs = dict()
             obs["agent_pos"] = objective_pos.view(-1, self.n_agents, 2)
             obs["landmark_pos"] = landmark_pos
             obs["agent_vel"] = objective_vel.view(batch_size, self.n_agents, 2)
             obs["relative_landmark_pos"] = objective_relative_landmarks_pos
             obs["other_pos"] = objective_relative_other_pos
-
-            with torch.no_grad():
-                h_objective_graph_encoding = self.graph_encoder(obs)
-
-            distance = torch.pairwise_distance(h_agent_graph_metric, h_objective_graph_encoding,
-                                               keepdim=True).unsqueeze(1).repeat(1, self.n_agents, 1)
 
             # create agent - entity graph
             # cat one agent with the 3 entities
@@ -246,26 +230,26 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
 
             agents_final_features = torch.cat(
                 [
-                    h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
-                    h_objective_graph_encoding.unsqueeze(1).repeat(1, self.n_agents, 1),
-                    distance,
-                    agents_pos,
+                    # h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
+                    # h_objective_graph_encoding.unsqueeze(1).repeat(1, self.n_agents, 1),
+                    # distance,
+                    # agents_pos,
                     h_agents_graph
                 ], dim=2)
 
             res = self.final_mlp(agents_final_features.view(batch_size, self.n_agents, -1))
 
         tensordict.set(self.out_keys[0], res)
-        tensordict.set(self.out_keys[1], -distance * 0.1)
+
         return tensordict
 
 
 @dataclass
-class SimpleSpreadObjectiveSharingPreTrainedConfig(ModelConfig):
+class SimpleSpreadAgentCommConfig(ModelConfig):
     # The config parameters for this class, these will be loaded from yaml
     activation_class: Type[nn.Module] = MISSING
 
     @staticmethod
     def associated_class():
         # The associated algorithm class
-        return SimpleSpreadObjectiveSharingPreTrained
+        return SimpleSpreadAgentComm
