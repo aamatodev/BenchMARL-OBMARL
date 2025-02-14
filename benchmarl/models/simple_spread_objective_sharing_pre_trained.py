@@ -15,6 +15,7 @@ from benchmarl.models.common import Model, ModelConfig
 from torchrl.data import Composite, Unbounded, ReplayBuffer, LazyTensorStorage
 
 from contrastive_learning.model.scl_model import SCLModel
+from contrastive_learning.model.scl_model_v2 import SCLModelv2
 from tensordict import TensorDictBase, TensorDict
 from torch import nn, cosine_similarity
 from torchrl.modules import MLP, MultiAgentMLP
@@ -150,9 +151,9 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
             num_cells=[256, 128, 32],
         )
 
-        self.graph_encoder = SCLModel(self.device).to(device=self.device)
+        self.graph_encoder = SCLModelv2(self.device).to(device=self.device)
         self.graph_encoder.load_state_dict(
-            torch.load("./contrastive_learning/model_full_dict_large_60eps.pth"))
+            torch.load("./contrastive_learning/model_full_dict_large_10eps_v2.pth"))
         self.graph_encoder.eval()
 
     def _perform_checks(self):
