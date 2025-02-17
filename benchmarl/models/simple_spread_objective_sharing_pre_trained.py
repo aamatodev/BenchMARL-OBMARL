@@ -153,7 +153,7 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
 
         self.graph_encoder = SCLModelv2(self.device).to(device=self.device)
         self.graph_encoder.load_state_dict(
-            torch.load("./contrastive_learning/model_full_dict_large_10eps_v2.pth"))
+            torch.load("./contrastive_learning/model_full_dict_large_100_v2.pth"))
         self.graph_encoder.eval()
 
     def _perform_checks(self):
