@@ -86,7 +86,7 @@ def extract_features_from_obs(obs):
     return agents_pos, agents_vel, landmarks_pos, relative_landmarks_pos, relative_other_pos
 
 
-def generate_objective_node_features(landmark_pos):
+def generate_objective_node_features(landmark_pos, n_agents=3):
     # in simple spread, the objective is reached once all the landmarks are covered. This happens when the agents
     # positions are equals to the landmarks positions
     n_landmark = landmark_pos.shape[1]
@@ -95,11 +95,14 @@ def generate_objective_node_features(landmark_pos):
 
     relative_landmarks_pos = landmark_pos - objective_pos.repeat(1, 1, n_landmark)
 
-    indices = torch.tensor([
-        [2, 3, 4, 5],  # Keep the last 4 elements for the first element
-        [0, 1, 4, 5],  # Keep the first two and last two elements for the second element
-        [0, 1, 2, 3],  # Keep the first four elements for the third element
-    ]).to(landmark_pos.device)
+    # Dynamically generate indices for n agents
+    indices = []
+    for i in range(n_agents):
+        s = i * 2
+        exclude = [s, s + 1]
+        indices.append([j for j in range(2 * n_agents) if j not in exclude])
+
+    indices = torch.tensor(indices, device=landmark_pos.device)
     indices = indices.unsqueeze(0).expand(landmark_pos.shape[0], -1, -1)
     # Use `gather` to apply the indexing along the last dimension
     relative_other_pos = torch.gather(relative_landmarks_pos, 2, indices)
@@ -168,7 +171,7 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
 
             # create objective node features
             objective_pos, objective_vel, objective_relative_landmarks_pos, objective_relative_other_pos = generate_objective_node_features(
-                landmark_pos)
+                landmark_pos, self.n_agents)
 
             with torch.no_grad():
                 h_agent_graph_metric = self.graph_encoder(tensordict.get("agents")["observation"])

@@ -50,7 +50,10 @@ class SimpleSpreadMlp(Model):
             is_critic=kwargs.pop("is_critic"),
         )
 
-        self.input_features = 14
+        self.input_features = sum(
+            [spec.shape[-1] for spec in self.input_spec.values(True, True)]
+        ) - self.n_agents * 2  # we remove the "landmark_pos" from the input features
+
         self.output_features = self.output_leaf_spec.shape[-1]
 
         if self.input_has_agent_dim:
