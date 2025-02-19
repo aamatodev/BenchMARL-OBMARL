@@ -102,7 +102,8 @@ class Maddpg(Algorithm):
                 {
                     group: Composite(
                         {"param": Unbounded(shape=logits_shape),
-                         "distance": Unbounded(shape=(n_agents, 1))},
+                         "distance": Unbounded(shape=(n_agents, 1)),
+                         "graphs": Unbounded(shape=(n_agents, 256))},
                         shape=(n_agents,),
                     )
                 }

@@ -261,6 +261,11 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
 
         tensordict.set(self.out_keys[0], res)
         tensordict.set(self.out_keys[1], -distance * 0.1)
+        tensordict.set(self.out_keys[2],  torch.cat(
+                [
+                    h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
+                    h_objective_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1)
+                ], dim=2))
 
         return tensordict
 
