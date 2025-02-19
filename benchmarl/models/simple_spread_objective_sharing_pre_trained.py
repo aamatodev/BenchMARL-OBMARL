@@ -186,9 +186,9 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
             obs["other_pos"] = objective_relative_other_pos
 
             with torch.no_grad():
-                h_objective_graph_encoding = self.graph_encoder(obs)
+                h_objective_graph_metric = self.graph_encoder(obs)
 
-            distance = torch.pairwise_distance(h_agent_graph_metric, h_objective_graph_encoding,
+            distance = torch.pairwise_distance(h_agent_graph_metric, h_objective_graph_metric,
                                                keepdim=True).unsqueeze(1).repeat(1, self.n_agents, 1)
 
             # create agent - entity graph
@@ -251,8 +251,8 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
             agents_final_features = torch.cat(
                 [
                     h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
-                    h_objective_graph_encoding.unsqueeze(1).repeat(1, self.n_agents, 1),
-                    distance,
+                    h_objective_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
+                    distance * 0.1,
                     agents_pos,
                     h_agents_graph
                 ], dim=2)
@@ -261,6 +261,7 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
 
         tensordict.set(self.out_keys[0], res)
         tensordict.set(self.out_keys[1], -distance * 0.1)
+
         return tensordict
 
 

@@ -50,6 +50,8 @@ class SimpleSpreadMlp(Model):
             is_critic=kwargs.pop("is_critic"),
         )
 
+        self.in_keys.remove(('agents', 'observation', 'landmark_pos'))
+
         self.input_features = sum(
             [spec.shape[-1] for spec in self.input_spec.values(True, True)]
         ) - self.n_agents * 2  # we remove the "landmark_pos" from the input features
@@ -114,9 +116,6 @@ class SimpleSpreadMlp(Model):
             )
 
     def _forward(self, tensordict: TensorDictBase) -> TensorDictBase:
-        # Gather in_key: for disperse we just get [agent_pos, agent_vel, relative_landmark_pos]
-        self.in_keys = [('agents', 'observation', 'agent_pos'), ('agents', 'observation', 'agent_vel'),
-                        ('agents', 'observation', 'relative_landmark_pos'), ('agents', 'observation', 'other_pos')]
 
         input = torch.cat([tensordict.get(in_key) for in_key in self.in_keys], dim=-1)
 

@@ -97,10 +97,12 @@ class Maddpg(Algorithm):
             actor_input_spec = Composite(
                 {group: self.observation_spec[group].clone().to(self.device)}
             )
+
             actor_output_spec = Composite(
                 {
                     group: Composite(
-                        {"param": Unbounded(shape=logits_shape)},
+                        {"param": Unbounded(shape=logits_shape),
+                         "distance": Unbounded(shape=(n_agents, 1))},
                         shape=(n_agents,),
                     )
                 }

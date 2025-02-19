@@ -4,5 +4,5 @@ defaults:
 
 
 max_steps: 100
-n_agents: 5
+n_agents: 3
 obs_agents: True
