@@ -207,7 +207,7 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
                 objective_relative_other_pos], dim=2).view(batch_size, 1, self.n_agents, -1).expand(-1, self.n_agents,
                                                                                                     -1, -1)
 
-            final_tensor = torch.cat((agents_features, objective_features), dim=2).view(batch_size * self.n_agents, 4,
+            final_tensor = torch.cat((agents_features, objective_features), dim=2).view(batch_size * self.n_agents, self.n_agents + 1,
                                                                                         -1)
 
             # agents - entity positions

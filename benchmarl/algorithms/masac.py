@@ -50,20 +50,20 @@ class Masac(Algorithm):
     """
 
     def __init__(
-        self,
-        share_param_critic: bool,
-        num_qvalue_nets: int,
-        loss_function: str,
-        delay_qvalue: bool,
-        target_entropy: Union[float, str],
-        discrete_target_entropy_weight: float,
-        alpha_init: float,
-        min_alpha: Optional[float],
-        max_alpha: Optional[float],
-        fixed_alpha: bool,
-        scale_mapping: str,
-        use_tanh_normal: bool,
-        **kwargs
+            self,
+            share_param_critic: bool,
+            num_qvalue_nets: int,
+            loss_function: str,
+            delay_qvalue: bool,
+            target_entropy: Union[float, str],
+            discrete_target_entropy_weight: float,
+            alpha_init: float,
+            min_alpha: Optional[float],
+            max_alpha: Optional[float],
+            fixed_alpha: bool,
+            scale_mapping: str,
+            use_tanh_normal: bool,
+            **kwargs
     ):
         super().__init__(**kwargs)
 
@@ -85,7 +85,7 @@ class Masac(Algorithm):
     #############################
 
     def _get_loss(
-        self, group: str, policy_for_loss: TensorDictModule, continuous: bool
+            self, group: str, policy_for_loss: TensorDictModule, continuous: bool
     ) -> Tuple[LossModule, bool]:
         if continuous:
             # Loss
@@ -152,7 +152,7 @@ class Masac(Algorithm):
         return items
 
     def _get_policy_for_loss(
-        self, group: str, model_config: ModelConfig, continuous: bool
+            self, group: str, model_config: ModelConfig, continuous: bool
     ) -> TensorDictModule:
         n_agents = len(self.group_map[group])
         if continuous:
@@ -171,7 +171,8 @@ class Masac(Algorithm):
         actor_output_spec = Composite(
             {
                 group: Composite(
-                    {"logits": Unbounded(shape=logits_shape)},
+                    {"logits": Unbounded(shape=logits_shape),
+                     "distance": Unbounded(shape=(n_agents, 1))},
                     shape=(n_agents,),
                 )
             }
@@ -242,7 +243,7 @@ class Masac(Algorithm):
         return policy
 
     def _get_policy_for_collection(
-        self, policy_for_loss: TensorDictModule, group: str, continuous: bool
+            self, policy_for_loss: TensorDictModule, group: str, continuous: bool
     ) -> TensorDictModule:
         return policy_for_loss
 

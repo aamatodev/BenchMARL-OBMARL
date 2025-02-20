@@ -76,14 +76,11 @@ class SimpleSpreadMlp(Model):
             model_index=kwargs.pop("model_index"),
             is_critic=kwargs.pop("is_critic"),
         )
-        # self.in_keys.remove(('agents', 'observation', 'landmark_pos'))
-        # self.in_keys.remove(('agents', 'observation', 'landmark_pos'))
+        self.in_keys.remove(('agents', 'observation', 'landmark_pos'))
 
-        # self.input_features = sum(
-        #     [spec.shape[-1] for spec in self.input_spec.values(True, True)]
-        # ) - self.n_agents * 2  # we remove the "landmark_pos" from the input features
-
-        self.input_features = 14  # we remove the "landmark_pos" from the input features
+        self.input_features = sum(
+            [spec.shape[-1] for spec in self.input_spec.values(True, True)]
+        ) - self.n_agents * 2  # we remove the "landmark_pos" from the input features
 
         self.output_features = self.output_leaf_spec.shape[-1]
 
@@ -109,11 +106,6 @@ class SimpleSpreadMlp(Model):
                     for _ in range(self.n_agents if not self.share_params else 1)
                 ]
             )
-
-        self.graph_encoder = SCLModelv2(self.device).to(device=self.device)
-        self.graph_encoder.load_state_dict(
-            torch.load("./contrastive_learning/model_full_dict_large_100_v2.pth"))
-        self.graph_encoder.eval()
 
     def _perform_checks(self):
         super()._perform_checks()
@@ -151,38 +143,7 @@ class SimpleSpreadMlp(Model):
 
     def _forward(self, tensordict: TensorDictBase) -> TensorDictBase:
 
-        agents_pos, agents_vel, landmark_pos, relative_landmarks_pos, relative_other_pos = extract_features_from_obs(
-            tensordict.get("agents")["observation"])
-        # batch_size = agents_pos.shape[:-2][0]
-        #
-        # # create objective node features
-        # objective_pos, objective_vel, objective_relative_landmarks_pos, objective_relative_other_pos = generate_objective_node_features(
-        #     landmark_pos, self.n_agents)
-        #
-        # with torch.no_grad():
-        #     h_agent_graph_metric = self.graph_encoder(tensordict.get("agents")["observation"])
-        #
-        # # create obs for agents in objective position and objective
-        #
-        # obs = dict()
-        # obs["agent_pos"] = objective_pos.view(-1, self.n_agents, 2)
-        # obs["landmark_pos"] = landmark_pos
-        # obs["agent_vel"] = objective_vel.view(batch_size, self.n_agents, 2)
-        # obs["relative_landmark_pos"] = objective_relative_landmarks_pos
-        # obs["other_pos"] = objective_relative_other_pos
-        #
-        # with torch.no_grad():
-        #     h_objective_graph_metric = self.graph_encoder(obs)
-        #
-        # distance = torch.pairwise_distance(h_agent_graph_metric, h_objective_graph_metric,
-        #                                    keepdim=True).unsqueeze(1).repeat(1, self.n_agents, 1)
-
-        input = torch.cat([agents_pos, agents_vel, relative_landmarks_pos, relative_other_pos], dim=-1)
-
-        # input = torch.cat([input,
-        #                    h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
-        #                    h_objective_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
-        #                    distance * 0.1], dim=-1)
+        input = torch.cat([tensordict.get(in_key) for in_key in self.in_keys], dim=-1)
 
         # Has multi-agent input dimension
         if self.input_has_agent_dim:

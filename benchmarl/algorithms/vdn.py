@@ -38,7 +38,7 @@ class Vdn(Algorithm):
     #############################
 
     def _get_loss(
-        self, group: str, policy_for_loss: TensorDictModule, continuous: bool
+            self, group: str, policy_for_loss: TensorDictModule, continuous: bool
     ) -> Tuple[LossModule, bool]:
         if continuous:
             raise NotImplementedError("Vdn is not compatible with continuous actions.")
@@ -73,7 +73,7 @@ class Vdn(Algorithm):
         }
 
     def _get_policy_for_loss(
-        self, group: str, model_config: ModelConfig, continuous: bool
+            self, group: str, model_config: ModelConfig, continuous: bool
     ) -> TensorDictModule:
         n_agents = len(self.group_map[group])
         logits_shape = [
@@ -88,7 +88,8 @@ class Vdn(Algorithm):
         actor_output_spec = Composite(
             {
                 group: Composite(
-                    {"action_value": Unbounded(shape=logits_shape)},
+                    {"action_value": Unbounded(shape=logits_shape),
+                     "distance": Unbounded(shape=(n_agents, 1))},
                     shape=(n_agents,),
                 )
             }
@@ -124,7 +125,7 @@ class Vdn(Algorithm):
         return TensorDictSequential(actor_module, value_module)
 
     def _get_policy_for_collection(
-        self, policy_for_loss: TensorDictModule, group: str, continuous: bool
+            self, policy_for_loss: TensorDictModule, group: str, continuous: bool
     ) -> TensorDictModule:
         if self.action_mask_spec is not None:
             action_mask_key = (group, "action_mask")
