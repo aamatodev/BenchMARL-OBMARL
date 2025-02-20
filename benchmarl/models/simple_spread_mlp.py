@@ -24,7 +24,7 @@ def generate_objective_node_features(landmark_pos, n_agents=3):
     # in simple spread, the objective is reached once all the landmarks are covered. This happens when the agents
     # positions are equals to the landmarks positions
     n_landmark = landmark_pos.shape[1]
-    objective_pos = landmark_pos[:, 1, :].view(-1, n_landmark, 2).clone().detach()
+    objective_pos = landmark_pos[:, 1, :].view(-1, n_agents, 2).clone().detach()
     objective_vel = torch.zeros_like(objective_pos)
 
     relative_landmarks_pos = landmark_pos - objective_pos.repeat(1, 1, n_landmark)
@@ -83,7 +83,7 @@ class SimpleSpreadMlp(Model):
         #     [spec.shape[-1] for spec in self.input_spec.values(True, True)]
         # ) - self.n_agents * 2  # we remove the "landmark_pos" from the input features
 
-        self.input_features = 273  # we remove the "landmark_pos" from the input features
+        self.input_features = 14  # we remove the "landmark_pos" from the input features
 
         self.output_features = self.output_leaf_spec.shape[-1]
 
@@ -153,36 +153,37 @@ class SimpleSpreadMlp(Model):
 
         agents_pos, agents_vel, landmark_pos, relative_landmarks_pos, relative_other_pos = extract_features_from_obs(
             tensordict.get("agents")["observation"])
-        batch_size = agents_pos.shape[:-2][0]
+        # batch_size = agents_pos.shape[:-2][0]
+        #
+        # # create objective node features
+        # objective_pos, objective_vel, objective_relative_landmarks_pos, objective_relative_other_pos = generate_objective_node_features(
+        #     landmark_pos, self.n_agents)
+        #
+        # with torch.no_grad():
+        #     h_agent_graph_metric = self.graph_encoder(tensordict.get("agents")["observation"])
+        #
+        # # create obs for agents in objective position and objective
+        #
+        # obs = dict()
+        # obs["agent_pos"] = objective_pos.view(-1, self.n_agents, 2)
+        # obs["landmark_pos"] = landmark_pos
+        # obs["agent_vel"] = objective_vel.view(batch_size, self.n_agents, 2)
+        # obs["relative_landmark_pos"] = objective_relative_landmarks_pos
+        # obs["other_pos"] = objective_relative_other_pos
+        #
+        # with torch.no_grad():
+        #     h_objective_graph_metric = self.graph_encoder(obs)
+        #
+        # distance = torch.pairwise_distance(h_agent_graph_metric, h_objective_graph_metric,
+        #                                    keepdim=True).unsqueeze(1).repeat(1, self.n_agents, 1)
 
-        # create objective node features
-        objective_pos, objective_vel, objective_relative_landmarks_pos, objective_relative_other_pos = generate_objective_node_features(
-            landmark_pos, self.n_agents)
+        input = torch.cat([agents_pos, agents_vel, relative_landmarks_pos, relative_other_pos], dim=-1)
 
-        with torch.no_grad():
-            h_agent_graph_metric = self.graph_encoder(tensordict.get("agents")["observation"])
+        # input = torch.cat([input,
+        #                    h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
+        #                    h_objective_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
+        #                    distance * 0.1], dim=-1)
 
-        # create obs for agents in objective position and objective
-
-        obs = dict()
-        obs["agent_pos"] = objective_pos.view(-1, self.n_agents, 2)
-        obs["landmark_pos"] = landmark_pos
-        obs["agent_vel"] = objective_vel.view(batch_size, self.n_agents, 2)
-        obs["relative_landmark_pos"] = objective_relative_landmarks_pos
-        obs["other_pos"] = objective_relative_other_pos
-
-        with torch.no_grad():
-            h_objective_graph_metric = self.graph_encoder(obs)
-
-        distance = torch.pairwise_distance(h_agent_graph_metric, h_objective_graph_metric,
-                                           keepdim=True).unsqueeze(1).repeat(1, self.n_agents, 1)
-
-        input = torch.cat([agents_pos, agents_vel, relative_landmarks_pos, relative_other_pos, tensordict.get("agents")["action"]], dim=-1)
-
-        input = torch.cat([input,
-                           h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
-                           h_objective_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
-                           distance * 0.1], dim=-1)
         # Has multi-agent input dimension
         if self.input_has_agent_dim:
             res = self.mlp.forward(input)
