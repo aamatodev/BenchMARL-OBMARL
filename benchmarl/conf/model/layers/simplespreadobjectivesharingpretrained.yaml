@@ -1,3 +1,4 @@
 name: simplespreadobjectivematchinggnnpretrained
 
 activation_class: torch.nn.ReLU
+threshold: 8.0

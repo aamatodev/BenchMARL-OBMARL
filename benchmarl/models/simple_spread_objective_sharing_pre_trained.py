@@ -114,6 +114,7 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
     def __init__(
             self,
             activation_class: Type[nn.Module],
+            threshold: float,
             **kwargs,
     ):
         # Remember the kwargs to the super() class
@@ -135,6 +136,8 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
         self.input_features = sum(
             [spec.shape[-1] for spec in self.input_spec.values(True, True)]
         ) - self.n_agents * 2  # we remove the "landmark_pos" from the input features
+        self.activation_class = activation_class
+        self.threshold = threshold
 
         self.raw_feature_encoder = Encoder(self.input_features, 128).to(self.device)
         self.node_feature_encoder = Encoder(277, 128).to(self.device)
@@ -149,7 +152,7 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
             centralised=self.centralised,
             share_params=self.share_params,
             device=self.device,
-            activation_class=torch.nn.ReLU,
+            activation_class=activation_class,
             depth=3,
             num_cells=[256, 128, 32],
         )
@@ -190,6 +193,9 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
 
             distance = torch.pairwise_distance(h_agent_graph_metric, h_objective_graph_metric,
                                                keepdim=True).unsqueeze(1).repeat(1, self.n_agents, 1)
+
+            c_reward = torch.zeros_like(distance)  # Initialize reward tensor
+            c_reward[distance < self.threshold] = self.threshold - distance[distance < self.threshold]  # Reward increases as distance decreases
 
             # create agent - entity graph
             # cat one agent with the 3 entities
@@ -260,7 +266,7 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
             res = self.final_mlp(agents_final_features.view(batch_size, self.n_agents, -1))
 
         tensordict.set(self.out_keys[0], res)
-        tensordict.set(self.out_keys[1], -distance * 0.1)
+        tensordict.set(self.out_keys[1], c_reward)
 
         return tensordict
 
@@ -269,6 +275,7 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
 class SimpleSpreadObjectiveSharingPreTrainedConfig(ModelConfig):
     # The config parameters for this class, these will be loaded from yaml
     activation_class: Type[nn.Module] = MISSING
+    threshold: float = 5.0
 
     @staticmethod
     def associated_class():
