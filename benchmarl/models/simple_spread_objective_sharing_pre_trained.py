@@ -195,8 +195,14 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
                                                keepdim=True).unsqueeze(1).repeat(1, self.n_agents, 1)
 
             c_reward = torch.zeros_like(distance)  # Initialize reward tensor
-            c_reward[distance < self.threshold] = self.threshold - distance[distance < self.threshold]  # Reward increases as distance decreases
+            # Define a small threshold where we consider the agent "arrived"
+            epsilon = 1  # Adjust based on your needs
 
+            # Compute reward as before
+            c_reward[distance < self.threshold] = self.threshold - distance[distance < self.threshold]
+
+            # Once the agent is close enough, set a stable reward
+            c_reward[distance < epsilon] = self.threshold - epsilon  # Fixed reward once within `epsilon`
             # create agent - entity graph
             # cat one agent with the 3 entities
 
