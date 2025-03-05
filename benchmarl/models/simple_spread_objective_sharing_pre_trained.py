@@ -146,7 +146,7 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
         self.agents_agents_gnn = GATv2Conv(256, 128, 2, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=515,
+            n_agent_inputs=513,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -196,13 +196,20 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
 
             c_reward = torch.zeros_like(distance)  # Initialize reward tensor
             # Define a small threshold where we consider the agent "arrived"
-            epsilon = 1  # Adjust based on your needs
+            epsilon = 3  # Adjust based on your needs
+
+            max_reward = 10
+            alpha = 0.2
 
             # Compute reward as before
             c_reward[distance < self.threshold] = self.threshold - distance[distance < self.threshold]
 
+            c_reward[distance < epsilon] = max_reward * torch.exp(-alpha * distance[distance < epsilon])  # Apply clamping only
+            # where valid
+
             # Once the agent is close enough, set a stable reward
-            c_reward[distance < epsilon] = self.threshold - epsilon  # Fixed reward once within `epsilon`
+            c_reward[distance < 0.1] = 100
+
             # create agent - entity graph
             # cat one agent with the 3 entities
 
@@ -219,7 +226,8 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
                 objective_relative_other_pos], dim=2).view(batch_size, 1, self.n_agents, -1).expand(-1, self.n_agents,
                                                                                                     -1, -1)
 
-            final_tensor = torch.cat((agents_features, objective_features), dim=2).view(batch_size * self.n_agents, self.n_agents + 1,
+            final_tensor = torch.cat((agents_features, objective_features), dim=2).view(batch_size * self.n_agents,
+                                                                                        self.n_agents + 1,
                                                                                         -1)
 
             # agents - entity positions
@@ -264,8 +272,7 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
                 [
                     h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
                     h_objective_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
-                    distance * 0.1,
-                    agents_pos,
+                    distance,
                     h_agents_graph
                 ], dim=2)
 
