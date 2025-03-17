@@ -598,6 +598,7 @@ class Experiment(CallbackNotifier):
 
     def evaluate(self):
         """Run just the evaluation loop once."""
+        seed_everything(self.seed)
         self._evaluation_loop()
         self.logger.commit()
         print(
