@@ -146,7 +146,7 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
         self.agents_agents_gnn = GATv2Conv(256, 128, 2, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=513,
+            n_agent_inputs=514,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -262,14 +262,16 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
                                           node_pos=agents_pos_unrolled,
                                           edge_attr=None,
                                           n_agents=self.n_agents,
+                                          use_radius=True,
                                           device=self.device)
 
             h_agents_graph = self.agents_agents_gnn.forward(agents_graph.x,
                                                             agents_graph.edge_index,
                                                             agents_graph.edge_attr).view(batch_size, self.n_agents, -1)
-
+            agents_id = torch.arange(self.n_agents, device=self.device).unsqueeze(0).expand(batch_size, -1).unsqueeze(2)
             agents_final_features = torch.cat(
                 [
+                    agents_id,
                     h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
                     h_objective_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
                     distance,
