@@ -6,5 +6,5 @@ defaults:
 max_steps: 100
 n_agents: 3
 obs_agents: True
-x_semidim: 1
-y_semidim: 1
+x_semidim: 3
+y_semidim: 3

@@ -41,7 +41,7 @@ def generate_graph(batch_size, node_features, node_pos, edge_attr, n_agents, dev
 
     if use_radius:
         graphs.edge_index = torch_geometric.nn.pool.radius_graph(
-            graphs.pos, batch=graphs.batch, r=0.5, loop=True
+            graphs.pos, batch=graphs.batch, r=0.5, loop=False
         )
     else:
         adjacency = torch.ones(n_agents, n_agents, device=device, dtype=torch.long)
@@ -140,21 +140,22 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
         self.threshold = threshold
 
         self.raw_feature_encoder = Encoder(self.input_features, 128).to(self.device)
+        self.context_feature_encoder = Encoder(257, 32).to(self.device)
         self.node_feature_encoder = Encoder(277, 128).to(self.device)
 
         self.agents_entity_gnn = GATv2Conv(128, 128, 2, edge_dim=3).to(self.device)
         self.agents_agents_gnn = GATv2Conv(256, 128, 2, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=514,
+            n_agent_inputs=288,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
             share_params=self.share_params,
             device=self.device,
             activation_class=activation_class,
-            depth=3,
-            num_cells=[256, 128, 32],
+            depth=2,
+            num_cells=[128, 32],
         )
 
         self.graph_encoder = SCLModelv2(self.device).to(device=self.device)
@@ -204,7 +205,8 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
             # Compute reward as before
             c_reward[distance < self.threshold] = self.threshold - distance[distance < self.threshold]
 
-            c_reward[distance < epsilon] = max_reward * torch.exp(-alpha * distance[distance < epsilon])  # Apply clamping only
+            c_reward[distance < epsilon] = max_reward * torch.exp(
+                -alpha * distance[distance < epsilon])  # Apply clamping only
             # where valid
 
             # Once the agent is close enough, set a stable reward
@@ -269,12 +271,19 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
                                                             agents_graph.edge_index,
                                                             agents_graph.edge_attr).view(batch_size, self.n_agents, -1)
             agents_id = torch.arange(self.n_agents, device=self.device).unsqueeze(0).expand(batch_size, -1).unsqueeze(2)
-            agents_final_features = torch.cat(
+
+            context_features = torch.cat(
                 [
-                    agents_id,
                     h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
                     h_objective_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
                     distance,
+                 ], dim=2)
+
+            context_encoded = self.context_feature_encoder.forward(context_features.view(-1, 257)).view(batch_size, self.n_agents, -1)
+
+            agents_final_features = torch.cat(
+                [
+                    context_encoded,
                     h_agents_graph
                 ], dim=2)
 
