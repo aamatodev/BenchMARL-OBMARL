@@ -12,3 +12,5 @@ class TaskConfig:
     max_steps: int = MISSING
     obs_agents: bool = MISSING
     n_agents: int = MISSING
+    x_semidim: int = MISSING
+    y_semidim: int = MISSING
