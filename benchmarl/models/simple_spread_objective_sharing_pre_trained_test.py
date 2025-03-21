@@ -14,8 +14,7 @@ from benchmarl.models.common import Model, ModelConfig
 
 from torchrl.data import Composite, Unbounded, ReplayBuffer, LazyTensorStorage
 
-from contrastive_learning.model.scl_model import SCLModel
-from contrastive_learning.model.scl_model_v2 import SCLModelv2
+from cmodels.scl_model_v2 import SCLModelv2
 from tensordict import TensorDictBase, TensorDict
 from torch import nn, cosine_similarity
 from torchrl.modules import MLP, MultiAgentMLP
@@ -174,8 +173,13 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
             batch_size = agents_pos.shape[:-2][0]
 
             # create objective node features
-            objective_pos, objective_vel, objective_relative_landmarks_pos, objective_relative_other_pos = generate_objective_node_features(
-                landmark_pos, self.n_agents)
+            if self.training:
+                objective_pos, objective_vel, objective_relative_landmarks_pos, objective_relative_other_pos = generate_objective_node_features(
+                    torch.zeros_like(landmark_pos), self.n_agents)
+
+            if not self.training:
+                objective_pos, objective_vel, objective_relative_landmarks_pos, objective_relative_other_pos = generate_objective_node_features(
+                    tensordict.get("agents")["observation"]["objective_pos"], self.n_agents)
 
             with torch.no_grad():
                 h_agent_graph_metric = self.graph_encoder(tensordict.get("agents")["observation"])
@@ -184,7 +188,7 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
 
             obs = dict()
             obs["agent_pos"] = objective_pos.view(-1, self.n_agents, 2)
-            obs["landmark_pos"] = landmark_pos
+            obs["landmark_pos"] = torch.zeros_like(landmark_pos)
             obs["agent_vel"] = objective_vel.view(batch_size, self.n_agents, 2)
             obs["relative_landmark_pos"] = objective_relative_landmarks_pos
             obs["other_pos"] = objective_relative_other_pos
@@ -220,13 +224,6 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
                 agents_vel,
                 relative_landmarks_pos,
                 relative_other_pos], dim=2).view(batch_size, self.n_agents, 1, -1)
-
-            objective_features = torch.cat([
-                objective_pos,
-                objective_vel,
-                objective_relative_landmarks_pos,
-                objective_relative_other_pos], dim=2).view(batch_size, 1, self.n_agents, -1).expand(-1, self.n_agents,
-                                                                                                    -1, -1)
 
             h_agents_features_enc = self.raw_feature_encoder.forward(
                 agents_features.view(-1, self.input_features)).view(-1, 128)

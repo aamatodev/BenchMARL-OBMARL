@@ -1,5 +1,5 @@
 defaults:
-  - vmas_simple_spread_config
+  - vmas_simple_spread_graph_config
   - _self_
 
 

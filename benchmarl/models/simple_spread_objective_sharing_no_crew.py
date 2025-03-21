@@ -14,8 +14,7 @@ from benchmarl.models.common import Model, ModelConfig
 
 from torchrl.data import Composite, Unbounded, ReplayBuffer, LazyTensorStorage
 
-from contrastive_learning.cmodels.scl_model import SCLModel
-from contrastive_learning.cmodels.scl_model_v2 import SCLModelv2
+from cmodels.scl_model_v2 import SCLModelv2
 from tensordict import TensorDictBase, TensorDict
 from torch import nn, cosine_similarity
 from torchrl.modules import MLP, MultiAgentMLP
@@ -110,7 +109,7 @@ def generate_objective_node_features(landmark_pos, n_agents=3):
     return objective_pos, objective_vel, relative_landmarks_pos, relative_other_pos
 
 
-class SimpleSpreadObjectiveSharingPreTrained(Model):
+class SimpleSpreadObjectiveSharingNoCrew(Model):
     def __init__(
             self,
             activation_class: Type[nn.Module],
@@ -160,7 +159,7 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
 
         self.graph_encoder = SCLModelv2(self.device).to(device=self.device)
         self.graph_encoder.load_state_dict(
-            torch.load("./contrastive_learning/model_full_dict_large_100_v2.pth"))
+            torch.load("../../contrastive_learning/model_full_dict_large_100_v2.pth"))
         self.graph_encoder.eval()
 
     def _perform_checks(self):
@@ -195,24 +194,6 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
             distance = torch.pairwise_distance(h_agent_graph_metric, h_objective_graph_metric,
                                                keepdim=True).unsqueeze(1).repeat(1, self.n_agents, 1)
 
-            c_reward = torch.zeros_like(distance)  # Initialize reward tensor
-            # Define a small threshold where we consider the agent "arrived"
-            epsilon = 3  # Adjust based on your needs
-
-            max_reward = 10
-            alpha = 0.2
-
-            # Compute reward as before
-            c_reward[distance < self.threshold] = self.threshold - distance[distance < self.threshold]
-
-            c_reward[distance < epsilon] = max_reward * torch.exp(
-                -alpha * distance[distance < epsilon])  # Apply clamping only
-            # where valid
-
-            # Once the agent is close enough, set a stable reward
-            c_reward[distance < 0.1] = 100
-
-            # create agent - entity graph
             # cat one agent with the 3 entities
 
             agents_features = torch.cat([
@@ -290,13 +271,12 @@ class SimpleSpreadObjectiveSharingPreTrained(Model):
             res = self.final_mlp(agents_final_features.view(batch_size, self.n_agents, -1))
 
         tensordict.set(self.out_keys[0], res)
-        tensordict.set(self.out_keys[1], c_reward)
 
         return tensordict
 
 
 @dataclass
-class SimpleSpreadObjectiveSharingPreTrainedConfig(ModelConfig):
+class SimpleSpreadObjectiveSharingNoCrewConfig(ModelConfig):
     # The config parameters for this class, these will be loaded from yaml
     activation_class: Type[nn.Module] = MISSING
     threshold: float = 5.0
@@ -304,4 +284,4 @@ class SimpleSpreadObjectiveSharingPreTrainedConfig(ModelConfig):
     @staticmethod
     def associated_class():
         # The associated algorithm class
-        return SimpleSpreadObjectiveSharingPreTrained
+        return SimpleSpreadObjectiveSharingNoCrew

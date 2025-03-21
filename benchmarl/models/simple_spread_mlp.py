@@ -11,8 +11,6 @@ from typing import Optional, Sequence, Type
 
 import torch
 
-from contrastive_learning.model.scl_model import extract_features_from_obs
-from contrastive_learning.model.scl_model_v2 import SCLModelv2
 from tensordict import TensorDictBase
 from torch import nn
 from torchrl.modules import MLP, MultiAgentMLP

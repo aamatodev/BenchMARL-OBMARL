@@ -14,7 +14,7 @@ from benchmarl.models.common import Model, ModelConfig
 
 from torchrl.data import Composite, Unbounded, ReplayBuffer, LazyTensorStorage
 
-from contrastive_learning.model.scl_model import SCLModel
+from contrastive_learning.cmodels.scl_model import SCLModel
 from tensordict import TensorDictBase, TensorDict
 from torch import nn, cosine_similarity
 from torchrl.modules import MLP, MultiAgentMLP
