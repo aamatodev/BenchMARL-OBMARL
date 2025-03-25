@@ -9,7 +9,7 @@ n_pursuers: 2
 n_evaders: 5
 n_poisons: 10
 n_obstacles: 1
-n_coop: 1
+n_coop: 2
 n_sensors: 30
 sensor_range: 0.2
 radius: 0.015

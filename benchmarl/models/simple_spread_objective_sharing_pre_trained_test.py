@@ -2,24 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, MISSING
 from typing import Type
-
 import numpy as np
 import torch
 import torch_geometric
 from torch_geometric.nn import GATv2Conv
-from torchrl.data import Composite, Unbounded
-
-from benchmarl.models import Gnn, GnnConfig, DeepsetsConfig, Deepsets
 from benchmarl.models.common import Model, ModelConfig
-
-from torchrl.data import Composite, Unbounded, ReplayBuffer, LazyTensorStorage
-
 from cmodels.scl_model_v2 import SCLModelv2
-from tensordict import TensorDictBase, TensorDict
-from torch import nn, cosine_similarity
-from torchrl.modules import MLP, MultiAgentMLP
-
+from cmodels.scl_model_v3 import SCLModelv3
+from tensordict import TensorDictBase
+from torch import nn
 import torch.nn.functional as F
+
+from torchrl.modules import MultiAgentMLP
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
@@ -139,7 +133,7 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
         self.threshold = threshold
 
         self.raw_feature_encoder = Encoder(self.input_features, 128).to(self.device)
-        self.context_feature_encoder = Encoder(257, 32).to(self.device)
+        self.context_feature_encoder = Encoder(65, 32).to(self.device)
         self.node_feature_encoder = Encoder(277, 128).to(self.device)
 
         self.agents_entity_gnn = GATv2Conv(128, 128, 2, edge_dim=3).to(self.device)
@@ -157,9 +151,9 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
             num_cells=[128, 32],
         )
 
-        self.graph_encoder = SCLModelv2(self.device).to(device=self.device)
+        self.graph_encoder = SCLModelv3(self.device).to(device=self.device)
         self.graph_encoder.load_state_dict(
-            torch.load("./contrastive_learning/model_full_dict_large_100_v2.pth"))
+            torch.load("../../../contrastive_learning/model_full_dict_large_100_v3.pth"))
         self.graph_encoder.eval()
 
     def _perform_checks(self):
@@ -252,7 +246,7 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
                     distance,
                  ], dim=2)
 
-            context_encoded = self.context_feature_encoder.forward(context_features.view(-1, 257)).view(batch_size, self.n_agents, -1)
+            context_encoded = self.context_feature_encoder.forward(context_features.view(-1, 65)).view(batch_size, self.n_agents, -1)
 
             agents_final_features = torch.cat(
                 [
