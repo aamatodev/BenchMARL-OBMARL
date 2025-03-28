@@ -72,10 +72,10 @@ class Encoder(nn.Module):
 
 def extract_features_from_obs(tensor, N, M):
     # Reshape to separate environments, players, and (food + player) info
-    n_envs, n_players, _ = tensor.shape
+    n_envs = tensor.shape[0]
 
     # Reshape the last dimension to (N + M, 3) to structure as (x, y, lvl)
-    tensor = tensor.view(n_envs, n_players, -1, 3)
+    tensor = tensor.view(n_envs, M, -1, 3)
 
     # Extract food positions (first N entries)
     food_xy = tensor[:, :, :N, :2]  # Shape: [n_envs, n_players, N, 2]
@@ -163,7 +163,13 @@ class LbForagingObjectiveSharing(Model):
     def _forward(self, tensordict: TensorDictBase) -> TensorDictBase:
         # Input has multi-agent input dimension
         if self.input_has_agent_dim:
-            agents_pos, food_pos = extract_features_from_obs(tensordict.get("player")["observation"], 1, self.n_agents)
+
+            if len(tensordict.get("player")["observation"].shape) == 2:
+                raw_obs = tensordict.get("player")["observation"].unsqueeze(0)
+            else:
+                raw_obs = tensordict.get("player")["observation"]
+
+            agents_pos, food_pos = extract_features_from_obs(raw_obs, 1, self.n_agents)
             batch_size = agents_pos.shape[:-2][0]
 
             # create objective node features
@@ -206,7 +212,7 @@ class LbForagingObjectiveSharing(Model):
             # create agent - entity graph
             # cat one agent with the 3 entities
 
-            agents_features = tensordict.get("player")["observation"]
+            agents_features = raw_obs
 
             h_agents_features_enc = self.raw_feature_encoder.forward(
                 agents_features.view(-1, self.input_features))
@@ -247,8 +253,12 @@ class LbForagingObjectiveSharing(Model):
 
             res = self.final_mlp(agents_final_features.view(batch_size, self.n_agents, -1))
 
-        tensordict.set(self.out_keys[0], res)
-        tensordict.set(self.out_keys[1], c_reward)
+        if len(tensordict.get("player")["observation"].shape) == 2:
+            tensordict.set(self.out_keys[0], res.squeeze(0))
+            tensordict.set(self.out_keys[1], c_reward.squeeze(0))
+        else:
+            tensordict.set(self.out_keys[0], res)
+            tensordict.set(self.out_keys[1], c_reward)
 
         return tensordict
 
