@@ -3,13 +3,4 @@ defaults:
   - _self_
 
 task: "lbforaging"
-players: 2
-min_player_level: 1
-max_player_level: 3
-min_food_level: 1
-max_food_level: 2
-field_size: 20
-max_num_food: 3
-sight: 3
-max_cycles: 150
-force_coop: True
+max_cycles: 100
