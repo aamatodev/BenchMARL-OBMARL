@@ -154,7 +154,7 @@ class LbForagingObjectiveSharing(Model):
 
         self.graph_encoder = FclModelV1(self.device).to(device=self.device)
         self.graph_encoder.load_state_dict(
-            torch.load("../../../Tasks/lbforaging/state_dict_lb_foraging_model_full_v1.pth"))
+            torch.load("../../../Tasks/lbforaging/state_dict_lb_foraging_model_full_v2.pth"))
         self.graph_encoder.eval()
 
     def _perform_checks(self):
@@ -255,10 +255,10 @@ class LbForagingObjectiveSharing(Model):
 
         if len(tensordict.get("player")["observation"].shape) == 2:
             tensordict.set(self.out_keys[0], res.squeeze(0))
-            tensordict.set(self.out_keys[1], c_reward.squeeze(0))
+            tensordict.set(self.out_keys[1], c_reward.squeeze(0)/100)
         else:
             tensordict.set(self.out_keys[0], res)
-            tensordict.set(self.out_keys[1], c_reward)
+            tensordict.set(self.out_keys[1], c_reward/100)
 
         return tensordict
 
@@ -267,7 +267,7 @@ class LbForagingObjectiveSharing(Model):
 class LbForagingObjectiveSharingConfig(ModelConfig):
     # The config parameters for this class, these will be loaded from yaml
     activation_class: Type[nn.Module] = MISSING
-    threshold: float = 50.0
+    threshold: float = 100.0
 
     @staticmethod
     def associated_class():

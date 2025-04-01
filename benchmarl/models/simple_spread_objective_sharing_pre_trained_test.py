@@ -2,18 +2,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass, MISSING
 from typing import Type
+
 import numpy as np
 import torch
 import torch_geometric
 from torch_geometric.nn import GATv2Conv
-from benchmarl.models.common import Model, ModelConfig
-from cmodels.scl_model_v2 import SCLModelv2
-from cmodels.scl_model_v3 import SCLModelv3
-from tensordict import TensorDictBase
-from torch import nn
-import torch.nn.functional as F
+from torchrl.data import Composite, Unbounded
 
-from torchrl.modules import MultiAgentMLP
+from benchmarl.models import Gnn, GnnConfig, DeepsetsConfig, Deepsets
+from benchmarl.models.common import Model, ModelConfig
+
+from torchrl.data import Composite, Unbounded, ReplayBuffer, LazyTensorStorage
+
+from cmodels.scl_model_v2 import SCLModelv2
+from tensordict import TensorDictBase, TensorDict
+from torch import nn, cosine_similarity
+from torchrl.modules import MLP, MultiAgentMLP
+
+import torch.nn.functional as F
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
@@ -133,7 +139,7 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
         self.threshold = threshold
 
         self.raw_feature_encoder = Encoder(self.input_features, 128).to(self.device)
-        self.context_feature_encoder = Encoder(65, 32).to(self.device)
+        self.context_feature_encoder = Encoder(257, 32).to(self.device)
         self.node_feature_encoder = Encoder(277, 128).to(self.device)
 
         self.agents_entity_gnn = GATv2Conv(128, 128, 2, edge_dim=3).to(self.device)
@@ -151,9 +157,9 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
             num_cells=[128, 32],
         )
 
-        self.graph_encoder = SCLModelv3(self.device).to(device=self.device)
+        self.graph_encoder = SCLModelv2(self.device).to(device=self.device)
         self.graph_encoder.load_state_dict(
-            torch.load("../../../contrastive_learning/model_full_dict_large_100_v3.pth"))
+            torch.load("../../../contrastive_learning/model_full_dict_large_100_v2.pth"))
         self.graph_encoder.eval()
 
     def _perform_checks(self):
@@ -167,13 +173,9 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
             batch_size = agents_pos.shape[:-2][0]
 
             # create objective node features
-            if self.training:
-                objective_pos, objective_vel, objective_relative_landmarks_pos, objective_relative_other_pos = generate_objective_node_features(
-                    torch.zeros_like(landmark_pos), self.n_agents)
+            objective_pos, objective_vel, objective_relative_landmarks_pos, objective_relative_other_pos = generate_objective_node_features(
+                landmark_pos, self.n_agents)
 
-            if not self.training:
-                objective_pos, objective_vel, objective_relative_landmarks_pos, objective_relative_other_pos = generate_objective_node_features(
-                    tensordict.get("agents")["observation"]["objective_pos"], self.n_agents)
 
             with torch.no_grad():
                 h_agent_graph_metric = self.graph_encoder(tensordict.get("agents")["observation"])
@@ -182,7 +184,7 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
 
             obs = dict()
             obs["agent_pos"] = objective_pos.view(-1, self.n_agents, 2)
-            obs["landmark_pos"] = torch.zeros_like(landmark_pos)
+            obs["landmark_pos"] = landmark_pos
             obs["agent_vel"] = objective_vel.view(batch_size, self.n_agents, 2)
             obs["relative_landmark_pos"] = objective_relative_landmarks_pos
             obs["other_pos"] = objective_relative_other_pos
@@ -219,6 +221,13 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
                 relative_landmarks_pos,
                 relative_other_pos], dim=2).view(batch_size, self.n_agents, 1, -1)
 
+            objective_features = torch.cat([
+                objective_pos,
+                objective_vel,
+                objective_relative_landmarks_pos,
+                objective_relative_other_pos], dim=2).view(batch_size, 1, self.n_agents, -1).expand(-1, self.n_agents,
+                                                                                                    -1, -1)
+
             h_agents_features_enc = self.raw_feature_encoder.forward(
                 agents_features.view(-1, self.input_features)).view(-1, 128)
 
@@ -246,7 +255,7 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
                     distance,
                  ], dim=2)
 
-            context_encoded = self.context_feature_encoder.forward(context_features.view(-1, 65)).view(batch_size, self.n_agents, -1)
+            context_encoded = self.context_feature_encoder.forward(context_features.view(-1, 257)).view(batch_size, self.n_agents, -1)
 
             agents_final_features = torch.cat(
                 [

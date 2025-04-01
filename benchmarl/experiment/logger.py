@@ -255,6 +255,26 @@ class Logger:
             )
         return reward.mean(-2) if remove_agent_dim else reward
 
+    def _get_vanilla_reward(
+        self, group: str, td: TensorDictBase, remove_agent_dim: bool = False
+    ):
+        reward = td.get(("next", group, "vanilla_reward"), None)
+        if reward is None:
+            reward = (
+                td.get(("next", "vanilla_reward")).expand(td.get(group).shape).unsqueeze(-1)
+            )
+        return reward.mean(-2) if remove_agent_dim else reward
+
+    def _get_contrastive_reward(
+        self, group: str, td: TensorDictBase, remove_agent_dim: bool = False
+    ):
+        reward = td.get(("next", group, "contrastive_reward"), None)
+        if reward is None:
+            reward = (
+                td.get(("next", "contrastive_reward")).expand(td.get(group).shape).unsqueeze(-1)
+            )
+        return reward.mean(-2) if remove_agent_dim else reward
+
     def _get_agents_done(
         self, group: str, td: TensorDictBase, remove_agent_dim: bool = False
     ):
@@ -313,6 +333,17 @@ class Logger:
                     f"{prefix}/{group}/reward/agent_{i}/reward",
                     reward[..., i, :],
                 )
+                self._log_min_mean_max(
+                    to_log,
+                    f"{prefix}/{group}/reward/agent_{i}/vanilla_reward",
+                    vanilla_reward[..., i, :],
+                )
+                self._log_min_mean_max(
+                    to_log,
+                    f"{prefix}/{group}/reward/agent_{i}/contrastive_reward",
+                    contrastive_reward[..., i, :],
+                )
+
                 if any_episode_ended:
                     agent_global_done = unsqueeze_global_done[..., i, :]
                     self._log_min_mean_max(
@@ -323,6 +354,7 @@ class Logger:
 
         # 2. Here we log rewards from group data taking the mean over agents
         group_episode_reward = episode_reward.mean(-2)[global_done]
+
         if any_episode_ended:
             self._log_min_mean_max(
                 to_log, f"{prefix}/{group}/reward/episode_reward", group_episode_reward
