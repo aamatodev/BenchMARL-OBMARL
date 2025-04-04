@@ -275,7 +275,7 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
 class SimpleSpreadObjectiveSharingPreTrainedTestConfig(ModelConfig):
     # The config parameters for this class, these will be loaded from yaml
     activation_class: Type[nn.Module] = MISSING
-    threshold: float = 5.0
+    threshold: float = 20.0
 
     @staticmethod
     def associated_class():
