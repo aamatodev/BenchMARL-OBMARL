@@ -7,6 +7,8 @@ import numpy as np
 import torch
 import torch_geometric
 from torch_geometric.nn import GATv2Conv
+
+from cmodels.scl_model import SCLModel
 from torchrl.data import Composite, Unbounded
 
 from benchmarl.models import Gnn, GnnConfig, DeepsetsConfig, Deepsets
@@ -157,9 +159,9 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
             num_cells=[128, 32],
         )
 
-        self.graph_encoder = SCLModelv2(self.device).to(device=self.device)
+        self.graph_encoder = SCLModel(self.device).to(device=self.device)
         self.graph_encoder.load_state_dict(
-            torch.load("../../../contrastive_learning/model_full_dict_large_100_v2.pth"))
+            torch.load("../../../contrastive_learning/model_full_100_v1.pth"))
         self.graph_encoder.eval()
 
     def _perform_checks(self):
@@ -176,12 +178,10 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
             objective_pos, objective_vel, objective_relative_landmarks_pos, objective_relative_other_pos = generate_objective_node_features(
                 landmark_pos, self.n_agents)
 
-
             with torch.no_grad():
                 h_agent_graph_metric = self.graph_encoder(tensordict.get("agents")["observation"])
 
             # create obs for agents in objective position and objective
-
             obs = dict()
             obs["agent_pos"] = objective_pos.view(-1, self.n_agents, 2)
             obs["landmark_pos"] = landmark_pos
@@ -196,21 +196,15 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
                                                keepdim=True).unsqueeze(1).repeat(1, self.n_agents, 1)
 
             c_reward = torch.zeros_like(distance)  # Initialize reward tensor
-            # Define a small threshold where we consider the agent "arrived"
-            epsilon = 3  # Adjust based on your needs
 
-            max_reward = 10
-            alpha = 0.2
+            stability_threshold = 1  # Distance where stability reward applies
 
-            # Compute reward as before
+            # Reward before reaching the stable zone (Linear Decay)
             c_reward[distance < self.threshold] = self.threshold - distance[distance < self.threshold]
 
-            c_reward[distance < epsilon] = max_reward * torch.exp(
-                -alpha * distance[distance < epsilon])  # Apply clamping only
-            # where valid
-
-            # Once the agent is close enough, set a stable reward
-            c_reward[distance < 0.1] = 100
+            # Smooth transition to stable reward (Linear instead of exponential)
+            close_enough = distance < stability_threshold
+            c_reward[close_enough] = 100
 
             # create agent - entity graph
             # cat one agent with the 3 entities
@@ -253,9 +247,11 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
                     h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
                     h_objective_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
                     distance,
-                 ], dim=2)
+                ], dim=2)
 
-            context_encoded = self.context_feature_encoder.forward(context_features.view(-1, 257)).view(batch_size, self.n_agents, -1)
+            context_encoded = self.context_feature_encoder.forward(context_features.view(-1, 257)).view(batch_size,
+                                                                                                        self.n_agents,
+                                                                                                        -1)
 
             agents_final_features = torch.cat(
                 [
