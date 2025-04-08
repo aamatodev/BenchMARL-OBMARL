@@ -161,7 +161,7 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
 
         self.graph_encoder = SCLModel(self.device).to(device=self.device)
         self.graph_encoder.load_state_dict(
-            torch.load("../../../contrastive_learning/model_full_100_v1.pth"))
+            torch.load("../../../contrastive_learning/state_dict_100_v1.pth"))
         self.graph_encoder.eval()
 
     def _perform_checks(self):
@@ -271,7 +271,7 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
 class SimpleSpreadObjectiveSharingPreTrainedTestConfig(ModelConfig):
     # The config parameters for this class, these will be loaded from yaml
     activation_class: Type[nn.Module] = MISSING
-    threshold: float = 20.0
+    threshold: float = 12.0
 
     @staticmethod
     def associated_class():
