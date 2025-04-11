@@ -8,6 +8,7 @@ import torch
 import torch_geometric
 from torch_geometric.nn import GATv2Conv
 
+from Tasks.SimpleTag.contrastive_model.model.tag_contrastive_model import TagContrastiveModel
 from cmodels.scl_model import SCLModel
 from torchrl.data import Composite, Unbounded
 
@@ -80,38 +81,105 @@ class Encoder(nn.Module):
 def extract_features_from_obs(obs):
     agents_pos = obs["agent_pos"]
     agents_vel = obs["agent_vel"]
-    landmarks_pos = obs["landmark_pos"]
-    relative_landmarks_pos = obs["relative_landmark_pos"]
-    relative_other_pos = obs["other_pos"]
+    entity_pos = obs["entity_pos"]
+    other_pos = obs["other_pos"]
+    other_vel = obs["other_vel"]
 
-    return agents_pos, agents_vel, landmarks_pos, relative_landmarks_pos, relative_other_pos
+    return agents_pos, agents_vel, other_pos, other_vel, entity_pos
 
 
-def generate_objective_node_features(landmark_pos, n_agents=3):
-    # in simple spread, the objective is reached once all the landmarks are covered. This happens when the agents
-    # positions are equals to the landmarks positions
-    n_landmark = landmark_pos.shape[1]
-    objective_pos = landmark_pos[:, 1, :].view(-1, n_landmark, 2).clone().detach()
-    objective_vel = torch.zeros_like(objective_pos)
+def generate_objective_state_predators(pray_pos, target_mean_dist=0.1):
+    # Start with predators in a tight triangle
+    predator_positions = torch.Tensor([
+        [0.0, 0.0],
+        [0.05, 0.0],
+        [0.025, 0.043]
+    ]).to(pray_pos.device)
+    center = predator_positions.mean(axis=0)
 
-    relative_landmarks_pos = landmark_pos - objective_pos.repeat(1, 1, n_landmark)
+    # Place prey at center +/- small offset so mean distance ≈ target
+    predator_positions = predator_positions.unsqueeze(0).repeat(pray_pos.shape[0], 1, 1) + pray_pos.unsqueeze(1).repeat(
+        1, 3, 1) + torch.normal(0, 0.1, size=predator_positions.shape).to(pray_pos.device)
 
-    # Dynamically generate indices for n agents
+    objective_pos = predator_positions
+    objective_vel = torch.zeros_like(predator_positions)
+
     indices = []
-    for i in range(n_agents):
+    for i in range(3):
         s = i * 2
         exclude = [s, s + 1]
-        indices.append([j for j in range(2 * n_agents) if j not in exclude])
+        indices.append([j for j in range(2 * 3) if j not in exclude])
 
-    indices = torch.tensor(indices, device=landmark_pos.device)
-    indices = indices.unsqueeze(0).expand(landmark_pos.shape[0], -1, -1)
-    # Use `gather` to apply the indexing along the last dimension
-    relative_other_pos = torch.gather(relative_landmarks_pos, 2, indices)
+    relative_other_pos = []
+    for i in range(predator_positions.shape[0]):
+        for j in range(predator_positions.shape[1]):
+            relative_other_pos.append(predator_positions[i] - objective_pos[i][j])
+    relative_other_pos = torch.stack(relative_other_pos).reshape(predator_positions.shape[0], 3, 6)
 
-    return objective_pos, objective_vel, relative_landmarks_pos, relative_other_pos
+    indices = torch.tensor(indices, device=relative_other_pos.device)
+    indices = indices.unsqueeze(0).expand(relative_other_pos.shape[0], -1, -1)
+
+    relative_other_pos = torch.gather(relative_other_pos, 2, indices)
+
+    relative_pray_pos = []
+    for i in range(predator_positions.shape[0]):
+        for j in range(predator_positions.shape[1]):
+            relative_pray_pos.append(pray_pos[i] - objective_pos[i][j])
+
+    relative_prey_pos = torch.stack(relative_pray_pos).reshape(predator_positions.shape[0], 3, 2)
+
+    return objective_pos, objective_vel, relative_other_pos, relative_prey_pos
 
 
-class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
+def generate_objective_node_features(agents_pos):
+
+    objective_pos, objective_vel, relative_other_pos, relative_prey_pos = generate_objective_state_predators(
+        agents_pos[:, 3, :])
+
+    return objective_pos, objective_vel, relative_other_pos, relative_prey_pos
+
+
+def get_state_from_obs(obs, agent_group):
+    # from a single observation get the full env state
+    single_obs = obs[:, 0]
+    current_agents_pos = single_obs["agent_pos"]
+    other_agents_absolute_pos = single_obs["other_pos"] + current_agents_pos.repeat(1, 3)
+    agents_absolute_pos = torch.cat([current_agents_pos.unsqueeze(1), other_agents_absolute_pos.view(-1, 3, 2)], dim=1)
+    absolute_entity_pos = single_obs["entity_pos"] + current_agents_pos.repeat(1, 2)
+
+    indices = []
+    for i in range(4):
+        s = i * 2
+        exclude = [s, s + 1]
+        indices.append([j for j in range(2 * 4) if j not in exclude])
+
+    indices = torch.tensor(indices, device=obs.device)
+    indices = indices.unsqueeze(0).expand(obs.shape[0], -1, -1)
+
+    obs = {
+            "agent_pos": agents_absolute_pos,
+            "agent_vel": torch.zeros_like(agents_absolute_pos),
+            "other_pos": torch.zeros_like(obs["other_pos"]),
+            "other_vel": torch.zeros_like(agents_absolute_pos),
+            "entity_pos": absolute_entity_pos.unsqueeze(1).repeat(1, 4, 1) - agents_absolute_pos.repeat(1, 1, 2),
+    }
+
+    # generate obs for all 4 agents (3 adversaries + 1 prey)
+    tmp_other_pos = agents_absolute_pos.reshape(-1, 8).unsqueeze(1).repeat(1, 4, 1) - agents_absolute_pos[:].repeat(1, 1, 4)
+    obs["other_pos"] = torch.gather(tmp_other_pos, 2, indices)
+
+    if agent_group == "agent":
+        # if we are the pray, let's reorder the obs such as I am  the last agent
+        obs["agent_pos"] = torch.cat([obs["agent_pos"][:, 3, :].unsqueeze(1), obs["agent_pos"][:, :3, :]], dim=1)
+        obs["agent_vel"] = torch.cat([obs["agent_vel"][:, 3, :].unsqueeze(1), obs["agent_vel"][:, :3, :]], dim=1)
+        obs["other_pos"] = torch.cat([obs["other_pos"][:, 3, :].unsqueeze(1), obs["other_pos"][:, :3, :]], dim=1)
+        obs["other_vel"] = torch.cat([obs["other_vel"][:, 3, :].unsqueeze(1), obs["other_vel"][:, :3, :]], dim=1)
+        obs["entity_pos"] = torch.cat([obs["entity_pos"][:, 3, :].unsqueeze(1), obs["entity_pos"][:, :3, :]], dim=1)
+
+    return obs
+
+
+class SimpleTagObjectiveSharing(Model):
     def __init__(
             self,
             activation_class: Type[nn.Module],
@@ -140,7 +208,7 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
         self.activation_class = activation_class
         self.threshold = threshold
 
-        self.raw_feature_encoder = Encoder(self.input_features, 128).to(self.device)
+        self.raw_feature_encoder = Encoder(16, 128).to(self.device)
         self.context_feature_encoder = Encoder(257, 32).to(self.device)
         self.node_feature_encoder = Encoder(277, 128).to(self.device)
 
@@ -159,9 +227,10 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
             num_cells=[128, 32],
         )
 
-        self.graph_encoder = SCLModel(self.device).to(device=self.device)
+        self.graph_encoder = TagContrastiveModel(self.device).to(device=self.device)
         self.graph_encoder.load_state_dict(
-            torch.load("../../../contrastive_learning/state_dict_100_v1.pth"))
+            torch.load(
+                "/home/aamato/Documents/marl/objective-based-marl/Tasks/SimpleTag/contrastive_model/tag_dict_contrastive_model_full.pth"))
         self.graph_encoder.eval()
 
     def _perform_checks(self):
@@ -170,27 +239,49 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
     def _forward(self, tensordict: TensorDictBase) -> TensorDictBase:
         # Input has multi-agent input dimension
         if self.input_has_agent_dim:
-            agents_pos, agents_vel, landmark_pos, relative_landmarks_pos, relative_other_pos = extract_features_from_obs(
-                tensordict.get("agents")["observation"])
+
+            # merge groups obs
+            adversary_obs = tensordict.get(self.agent_group)["observation"]
+
+            state_obs = get_state_from_obs(adversary_obs, self.agent_group)
+
+            agents_pos, agents_vel, other_pos, other_vel, entity_pos = extract_features_from_obs(
+                state_obs)
+
+            agents_vel = torch.zeros(agents_pos.shape).to(agents_pos.device)
+            other_vel = torch.zeros(agents_pos.shape).to(other_pos.device)
+
             batch_size = agents_pos.shape[:-2][0]
 
             # create objective node features
-            objective_pos, objective_vel, objective_relative_landmarks_pos, objective_relative_other_pos = generate_objective_node_features(
-                landmark_pos, self.n_agents)
+            objective_pos, objective_vel, relative_other_pos, relative_prey_pos = generate_objective_node_features(
+                agents_pos)
 
+            obs_dict = {
+                "agent_pos": agents_pos,
+                "agent_vel": agents_vel,
+                "other_pos": other_pos,
+                "other_vel": other_vel,
+                "entity_pos": entity_pos
+            }
             with torch.no_grad():
-                h_agent_graph_metric = self.graph_encoder(tensordict.get("agents")["observation"])
+                h_agent_graph_metric = self.graph_encoder(obs_dict, (objective_pos, objective_vel, relative_other_pos, relative_prey_pos))
 
             # create obs for agents in objective position and objective
-            obs = dict()
-            obs["agent_pos"] = objective_pos.view(-1, self.n_agents, 2)
-            obs["landmark_pos"] = landmark_pos
-            obs["agent_vel"] = objective_vel.view(batch_size, self.n_agents, 2)
-            obs["relative_landmark_pos"] = objective_relative_landmarks_pos
-            obs["other_pos"] = objective_relative_other_pos
+
+            obj_obs_dict = {
+                "agent_pos": torch.cat([objective_pos, agents_pos[:, 3, :].unsqueeze(1)], dim=1),
+                "agent_vel": torch.zeros(batch_size, 4, 2).to(agents_pos.device),
+                "other_pos": torch.cat([torch.cat([relative_other_pos, relative_prey_pos], dim=2),
+                                        (objective_pos[:, :3, :].reshape(batch_size, -1) - agents_pos[:, 3, :].repeat(1,
+                                                                                                                      3)).unsqueeze(
+                                            1)], dim=1),
+                "other_vel": other_vel,
+                "entity_pos": entity_pos
+            }
 
             with torch.no_grad():
-                h_objective_graph_metric = self.graph_encoder(obs)
+                h_objective_graph_metric = self.graph_encoder(obj_obs_dict)
 
             distance = torch.pairwise_distance(h_agent_graph_metric, h_objective_graph_metric,
                                                keepdim=True).unsqueeze(1).repeat(1, self.n_agents, 1)
@@ -206,26 +297,19 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
             close_enough = distance < stability_threshold
             c_reward[close_enough] = 100
 
-            # create agent - entity graph
-            # cat one agent with the 3 entities
-
+            # agents feature encoding
             agents_features = torch.cat([
                 agents_pos,
                 agents_vel,
-                relative_landmarks_pos,
-                relative_other_pos], dim=2).view(batch_size, self.n_agents, 1, -1)
-
-            objective_features = torch.cat([
-                objective_pos,
-                objective_vel,
-                objective_relative_landmarks_pos,
-                objective_relative_other_pos], dim=2).view(batch_size, 1, self.n_agents, -1).expand(-1, self.n_agents,
-                                                                                                    -1, -1)
+                other_pos,
+                other_vel,
+                entity_pos,
+            ], dim=2).view(batch_size, 4, -1)
 
             h_agents_features_enc = self.raw_feature_encoder.forward(
-                agents_features.view(-1, self.input_features)).view(-1, 128)
+                agents_features.view(-1, 16)).view(-1, 128)
 
-            # now create the graph only with the agents
+            # agents gnn
             h_only_agents_unrolled = h_agents_features_enc.view(-1, 128)
             agents_pos_unrolled = agents_pos.view(-1, 2)
 
@@ -233,31 +317,39 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
                                           node_features=h_only_agents_unrolled,
                                           node_pos=agents_pos_unrolled,
                                           edge_attr=None,
-                                          n_agents=self.n_agents,
+                                          n_agents=4,
                                           use_radius=True,
                                           device=self.device)
 
             h_agents_graph = self.agents_agents_gnn.forward(agents_graph.x,
                                                             agents_graph.edge_index,
-                                                            agents_graph.edge_attr).view(batch_size, self.n_agents, -1)
-            agents_id = torch.arange(self.n_agents, device=self.device).unsqueeze(0).expand(batch_size, -1).unsqueeze(2)
+                                                            agents_graph.edge_attr).view(batch_size, 4, -1)
 
             context_features = torch.cat(
                 [
                     h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
                     h_objective_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
-                    distance,
+                    distance
                 ], dim=2)
 
             context_encoded = self.context_feature_encoder.forward(context_features.view(-1, 257)).view(batch_size,
                                                                                                         self.n_agents,
                                                                                                         -1)
 
+            single_contex_encoded = context_encoded[:, 0, :].unsqueeze(1).repeat(1, 4, 1)
             agents_final_features = torch.cat(
                 [
-                    context_encoded,
+                    single_contex_encoded,
                     h_agents_graph
                 ], dim=2)
+
+            if self.agent_group == "adversary":
+                # We only need the first agent's output
+                agents_final_features = agents_final_features[:, :3, :]
+            elif self.agent_group == "agent":
+                # We only need the last agent's output
+                agents_final_features = agents_final_features[:, 3, :]
+                c_reward = -c_reward
 
             res = self.final_mlp(agents_final_features.view(batch_size, self.n_agents, -1))
 
@@ -268,7 +360,7 @@ class SimpleSpreadObjectiveSharingPreTrainedTest(Model):
 
 
 @dataclass
-class SimpleSpreadObjectiveSharingPreTrainedTestConfig(ModelConfig):
+class SimpleTagObjectiveSharingConfig(ModelConfig):
     # The config parameters for this class, these will be loaded from yaml
     activation_class: Type[nn.Module] = MISSING
     threshold: float = 12.0
@@ -276,4 +368,4 @@ class SimpleSpreadObjectiveSharingPreTrainedTestConfig(ModelConfig):
     @staticmethod
     def associated_class():
         # The associated algorithm class
-        return SimpleSpreadObjectiveSharingPreTrainedTest
+        return SimpleTagObjectiveSharing

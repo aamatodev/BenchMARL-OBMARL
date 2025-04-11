@@ -1,4 +1,4 @@
-name: simplespreadobjectivematchinggnnpretrained
+name: simpletagobjectivesharing
 
 activation_class: torch.nn.ReLU
 threshold: 12.0
