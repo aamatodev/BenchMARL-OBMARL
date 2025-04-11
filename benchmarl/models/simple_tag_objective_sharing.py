@@ -9,18 +9,11 @@ import torch_geometric
 from torch_geometric.nn import GATv2Conv
 
 from Tasks.SimpleTag.contrastive_model.model.tag_contrastive_model import TagContrastiveModel
-from cmodels.scl_model import SCLModel
-from torchrl.data import Composite, Unbounded
-
-from benchmarl.models import Gnn, GnnConfig, DeepsetsConfig, Deepsets
 from benchmarl.models.common import Model, ModelConfig
 
-from torchrl.data import Composite, Unbounded, ReplayBuffer, LazyTensorStorage
-
-from cmodels.scl_model_v2 import SCLModelv2
-from tensordict import TensorDictBase, TensorDict
-from torch import nn, cosine_similarity
-from torchrl.modules import MLP, MultiAgentMLP
+from tensordict import TensorDictBase
+from torch import nn
+from torchrl.modules import MultiAgentMLP
 
 import torch.nn.functional as F
 
@@ -95,11 +88,10 @@ def generate_objective_state_predators(pray_pos, target_mean_dist=0.1):
         [0.05, 0.0],
         [0.025, 0.043]
     ]).to(pray_pos.device)
-    center = predator_positions.mean(axis=0)
 
     # Place prey at center +/- small offset so mean distance ≈ target
     predator_positions = predator_positions.unsqueeze(0).repeat(pray_pos.shape[0], 1, 1) + pray_pos.unsqueeze(1).repeat(
-        1, 3, 1) + torch.normal(0, 0.1, size=predator_positions.shape).to(pray_pos.device)
+        1, 3, 1)
 
     objective_pos = predator_positions
     objective_vel = torch.zeros_like(predator_positions)
@@ -132,7 +124,6 @@ def generate_objective_state_predators(pray_pos, target_mean_dist=0.1):
 
 
 def generate_objective_node_features(agents_pos):
-
     objective_pos, objective_vel, relative_other_pos, relative_prey_pos = generate_objective_state_predators(
         agents_pos[:, 3, :])
 
@@ -157,24 +148,28 @@ def get_state_from_obs(obs, agent_group):
     indices = indices.unsqueeze(0).expand(obs.shape[0], -1, -1)
 
     obs = {
-            "agent_pos": agents_absolute_pos,
-            "agent_vel": torch.zeros_like(agents_absolute_pos),
-            "other_pos": torch.zeros_like(obs["other_pos"]),
-            "other_vel": torch.zeros_like(agents_absolute_pos),
-            "entity_pos": absolute_entity_pos.unsqueeze(1).repeat(1, 4, 1) - agents_absolute_pos.repeat(1, 1, 2),
+        "agent_pos": agents_absolute_pos,
+        "agent_vel": torch.zeros_like(agents_absolute_pos),
+        "other_pos": torch.zeros_like(obs["other_pos"]),
+        "other_vel": torch.zeros_like(agents_absolute_pos),
+        "entity_pos": absolute_entity_pos.unsqueeze(1).repeat(1, 4, 1) - agents_absolute_pos.repeat(1, 1, 2),
     }
 
     # generate obs for all 4 agents (3 adversaries + 1 prey)
-    tmp_other_pos = agents_absolute_pos.reshape(-1, 8).unsqueeze(1).repeat(1, 4, 1) - agents_absolute_pos[:].repeat(1, 1, 4)
+    tmp_other_pos = agents_absolute_pos.reshape(-1, 8).unsqueeze(1).repeat(1, 4, 1) - agents_absolute_pos[:].repeat(1,
+                                                                                                                    1,
+                                                                                                                    4)
     obs["other_pos"] = torch.gather(tmp_other_pos, 2, indices)
 
     if agent_group == "agent":
         # if we are the pray, let's reorder the obs such as I am  the last agent
-        obs["agent_pos"] = torch.cat([obs["agent_pos"][:, 3, :].unsqueeze(1), obs["agent_pos"][:, :3, :]], dim=1)
-        obs["agent_vel"] = torch.cat([obs["agent_vel"][:, 3, :].unsqueeze(1), obs["agent_vel"][:, :3, :]], dim=1)
-        obs["other_pos"] = torch.cat([obs["other_pos"][:, 3, :].unsqueeze(1), obs["other_pos"][:, :3, :]], dim=1)
-        obs["other_vel"] = torch.cat([obs["other_vel"][:, 3, :].unsqueeze(1), obs["other_vel"][:, :3, :]], dim=1)
-        obs["entity_pos"] = torch.cat([obs["entity_pos"][:, 3, :].unsqueeze(1), obs["entity_pos"][:, :3, :]], dim=1)
+        obs["agent_pos"] = torch.cat([obs["agent_pos"][:, 1:, :], obs["agent_pos"][:, :1, :]], dim=1)
+        obs["agent_vel"] = torch.cat([obs["agent_vel"][:, 1:, :], obs["agent_vel"][:, :1, :]], dim=1)
+        obs["other_pos"] = torch.cat([obs["other_pos"][:, 1:, :], obs["other_pos"][:, :1, :]], dim=1)
+        obs["other_pos"][:, 0:3, :] = torch.cat([obs["other_pos"][:, 0:3, 2:], obs["other_pos"][:, 0:3, :2]], dim=2)
+        # obs["other_pos"][:, 0:3, :][:, :, [0, 1, 2, 3, 4, 5]] = obs["other_pos"][:, 0:3, :][:, :, [4, 5, 2, 3, 0, 1]]
+        obs["other_vel"] = torch.cat([obs["other_vel"][:, 1:, :], obs["other_vel"][:, :1, :]], dim=1)
+        obs["entity_pos"] = torch.cat([obs["entity_pos"][:, 1:, :], obs["entity_pos"][:, :1, :]], dim=1)
 
     return obs
 
@@ -241,9 +236,9 @@ class SimpleTagObjectiveSharing(Model):
         if self.input_has_agent_dim:
 
             # merge groups obs
-            adversary_obs = tensordict.get(self.agent_group)["observation"]
+            obs = tensordict.get(self.agent_group)["observation"]
 
-            state_obs = get_state_from_obs(adversary_obs, self.agent_group)
+            state_obs = get_state_from_obs(obs, self.agent_group)
 
             agents_pos, agents_vel, other_pos, other_vel, entity_pos = extract_features_from_obs(
                 state_obs)
@@ -265,7 +260,7 @@ class SimpleTagObjectiveSharing(Model):
                 "entity_pos": entity_pos
             }
             with torch.no_grad():
-                h_agent_graph_metric = self.graph_encoder(obs_dict, (objective_pos, objective_vel, relative_other_pos, relative_prey_pos))
+                h_agent_graph_metric = self.graph_encoder(obs_dict)
 
             # create obs for agents in objective position and objective
 
