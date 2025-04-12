@@ -225,7 +225,7 @@ class SimpleTagObjectiveSharing(Model):
         self.graph_encoder = TagContrastiveModel(self.device).to(device=self.device)
         self.graph_encoder.load_state_dict(
             torch.load(
-                "/home/aamato/Documents/marl/objective-based-marl/Tasks/SimpleTag/contrastive_model/tag_dict_contrastive_model_full.pth"))
+                "./Tasks/SimpleTag/contrastive_model/tag_dict_contrastive_model_full.pth"))
         self.graph_encoder.eval()
 
     def _perform_checks(self):
