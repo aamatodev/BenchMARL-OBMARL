@@ -96,17 +96,13 @@ def generate_objective_state_predators(pray_pos, target_mean_dist=0.1):
     objective_pos = predator_positions
     objective_vel = torch.zeros_like(predator_positions)
 
-    indices = []
-    for i in range(3):
-        s = i * 2
-        exclude = [s, s + 1]
-        indices.append([j for j in range(2 * 3) if j not in exclude])
-
-    relative_other_pos = []
-    for i in range(predator_positions.shape[0]):
-        for j in range(predator_positions.shape[1]):
-            relative_other_pos.append(predator_positions[i] - objective_pos[i][j])
-    relative_other_pos = torch.stack(relative_other_pos).reshape(predator_positions.shape[0], 3, 6)
+    indices = [[2, 3, 4, 5], [0, 1, 4, 5], [0, 1, 2, 3]]
+    # for i in range(3):
+    #     s = i * 2
+    #     exclude = [s, s + 1]
+    #     indices.append([j for j in range(2 * 3) if j not in exclude])
+    #
+    relative_other_pos = predator_positions.reshape(predator_positions.shape[0], 1, -1).repeat(1, predator_positions.shape[1], 1) - objective_pos.repeat(1, 1, 3)
 
     indices = torch.tensor(indices, device=relative_other_pos.device)
     indices = indices.unsqueeze(0).expand(relative_other_pos.shape[0], -1, -1)
@@ -225,7 +221,7 @@ class SimpleTagObjectiveSharing(Model):
         self.graph_encoder = TagContrastiveModel(self.device).to(device=self.device)
         self.graph_encoder.load_state_dict(
             torch.load(
-                "./Tasks/SimpleTag/contrastive_model/tag_dict_contrastive_model_full.pth"))
+                "/home/aamato/Documents/marl/objective-based-marl/Tasks/SimpleTag/contrastive_model/tag_dict_contrastive_model_full.pth"))
         self.graph_encoder.eval()
 
     def _perform_checks(self):
@@ -260,7 +256,7 @@ class SimpleTagObjectiveSharing(Model):
                 "entity_pos": entity_pos
             }
             with torch.no_grad():
-                h_agent_graph_metric = self.graph_encoder(obs_dict)
+                h_agent_graph_metric = self.graph_encoder(obs_dict, (objective_pos, objective_vel, relative_other_pos, relative_prey_pos))
 
             # create obs for agents in objective position and objective
 
@@ -276,7 +272,7 @@ class SimpleTagObjectiveSharing(Model):
             }
 
             with torch.no_grad():
-                h_objective_graph_metric = self.graph_encoder(obj_obs_dict)
+                h_objective_graph_metric = self.graph_encoder(obj_obs_dict,  (objective_pos, objective_vel, relative_other_pos, relative_prey_pos))
 
             distance = torch.pairwise_distance(h_agent_graph_metric, h_objective_graph_metric,
                                                keepdim=True).unsqueeze(1).repeat(1, self.n_agents, 1)
