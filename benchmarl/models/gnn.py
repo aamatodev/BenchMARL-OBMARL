@@ -420,7 +420,7 @@ def _batch_from_dense_to_ptg(
     n_agents = x.shape[-2]
     x = x.view(-1, x.shape[-1])
     if pos is not None:
-        pos = pos.view(-1, pos.shape[-1])
+        pos = pos.reshape(-1, pos.shape[-1])
     if vel is not None:
         vel = vel.view(-1, vel.shape[-1])
 
