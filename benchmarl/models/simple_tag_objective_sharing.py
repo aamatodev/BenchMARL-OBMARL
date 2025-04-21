@@ -11,7 +11,7 @@ from torch_geometric.nn import GATv2Conv
 from Tasks.SimpleTag.contrastive_model.model.tag_contrastive_model import TagContrastiveModel
 from benchmarl.models import GnnConfig, MlpConfig, Mlp, Gnn
 from benchmarl.models.common import Model, ModelConfig
-from data import Composite, Unbounded
+from torchrl.data import Composite, Unbounded
 
 from tensordict import TensorDictBase, TensorDict
 from torch import nn
@@ -199,9 +199,6 @@ class SimpleTagObjectiveSharing(Model):
         )
 
         self.output_features = self.output_leaf_spec.shape[-1]
-        self.input_features = sum(
-            [spec.shape[-1] for spec in self.input_spec.values(True, True)]
-        ) - self.n_agents * 2  # we remove the "landmark_pos" from the input features
         self.activation_class = activation_class
         self.threshold = threshold
 
@@ -278,10 +275,11 @@ class SimpleTagObjectiveSharing(Model):
         self.graph_encoder = TagContrastiveModel(self.device).to(device=self.device)
         self.graph_encoder.load_state_dict(
             torch.load(
-                "/home/aamato/Documents/marl/objective-based-marl/Tasks/SimpleTag/contrastive_model/tag_dict_contrastive_model_full.pth"))
+                "./Tasks/SimpleTag/contrastive_model/tag_dict_contrastive_model_full.pth"))
         self.graph_encoder.eval()
 
     def _perform_checks(self):
+
         super()._perform_checks()
 
     def _forward(self, tensordict: TensorDictBase) -> TensorDictBase:
