@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, MISSING
+from pathlib import Path
 from typing import Type
 
 import numpy as np
@@ -142,13 +143,13 @@ class SimpleSpreadObjectiveSharing(Model):
 
         self.raw_feature_encoder = Encoder(self.input_features, 128).to(self.device)
         self.context_feature_encoder = Encoder(257, 32).to(self.device)
-        self.node_feature_encoder = Encoder(277, 128).to(self.device)
+        # self.node_feature_encoder = Encoder(277, 128).to(self.device)
 
-        self.agents_entity_gnn = GATv2Conv(128, 128, 2, edge_dim=3).to(self.device)
-        self.agents_agents_gnn = GATv2Conv(128, 128, 2, edge_dim=3).to(self.device)
+        # self.agents_entity_gnn = GATv2Conv(128, 128, 2, edge_dim=3).to(self.device)
+        # self.agents_agents_gnn = GATv2Conv(128, 128, 2, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=288,
+            n_agent_inputs=160,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -160,15 +161,16 @@ class SimpleSpreadObjectiveSharing(Model):
         )
 
         self.graph_encoder = SCLModel(self.device).to(device=self.device)
-        self.graph_encoder.load_state_dict(
-            torch.load("../../../contrastive_learning/state_dict_100_v1.pth"))
+        BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
+        model_path = BASE_DIR / "contrastive_learning/state_dict_100_v1.pth"
+
+        self.graph_encoder.load_state_dict(torch.load(model_path))
         self.graph_encoder.eval()
 
     def _perform_checks(self):
         super()._perform_checks()
 
     def _forward(self, tensordict: TensorDictBase) -> TensorDictBase:
-
         # Input has multi-agent input dimension
         if self.input_has_agent_dim:
             agents_pos, agents_vel, landmark_pos, relative_landmarks_pos, relative_other_pos = extract_features_from_obs(
@@ -211,26 +213,28 @@ class SimpleSpreadObjectiveSharing(Model):
                 agents_pos,
                 agents_vel,
                 relative_landmarks_pos,
-                relative_other_pos], dim=2).view(batch_size, self.n_agents, 1, -1)
+                relative_other_pos], dim=2).view(batch_size, self.n_agents, -1)
 
-            h_agents_features_enc = self.raw_feature_encoder.forward(
-                agents_features.view(-1, self.input_features)).view(-1, 128)
+            # h_agents_features_enc = self.raw_feature_encoder.forward(
+            #     agents_features.view(-1, self.input_features)).view(-1, 128) #
+            #
+            h_agents_features_enc = self.raw_feature_encoder.forward(agents_features)
 
-            # agents gnn
-            h_only_agents_unrolled = h_agents_features_enc.view(-1, 128)
-            agents_pos_unrolled = agents_pos.view(-1, 2)
-
-            agents_graph = generate_graph(batch_size=batch_size,
-                                          node_features=h_only_agents_unrolled,
-                                          node_pos=agents_pos_unrolled,
-                                          edge_attr=None,
-                                          n_agents=self.n_agents,
-                                          use_radius=True,
-                                          device=self.device)
-
-            h_agents_graph = self.agents_agents_gnn.forward(agents_graph.x,
-                                                            agents_graph.edge_index,
-                                                            agents_graph.edge_attr).view(batch_size, self.n_agents, -1)
+            # # agents gnn
+            # h_only_agents_unrolled = h_agents_features_enc.view(-1, 128)
+            # agents_pos_unrolled = agents_pos.view(-1, 2)
+            #
+            # agents_graph = generate_graph(batch_size=batch_size,
+            #                               node_features=h_only_agents_unrolled,
+            #                               node_pos=agents_pos_unrolled,
+            #                               edge_attr=None,
+            #                               n_agents=self.n_agents,
+            #                               use_radius=True,
+            #                               device=self.device)
+            #
+            # h_agents_graph = self.agents_agents_gnn.forward(agents_graph.x,
+            #                                                 agents_graph.edge_index,
+            #                                                 agents_graph.edge_attr).view(batch_size, self.n_agents, -1)
 
             context_features = torch.cat(
                 [
@@ -246,7 +250,7 @@ class SimpleSpreadObjectiveSharing(Model):
             agents_final_features = torch.cat(
                 [
                     context_encoded,
-                    h_agents_graph
+                    h_agents_features_enc
                 ], dim=2)
 
             res = self.final_mlp(agents_final_features.view(batch_size, self.n_agents, -1))

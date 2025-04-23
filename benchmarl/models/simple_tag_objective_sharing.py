@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, MISSING
+from pathlib import Path
 from typing import Type
 
 import numpy as np
@@ -149,6 +150,12 @@ def get_state_from_obs(obs, agent_group):
     indices = torch.tensor(indices, device=obs.device)
     indices = indices.unsqueeze(0).expand(obs.shape[0], -1, -1)
 
+    # if agent_group == "adversary":
+    #     other_vel = obs["other_vel"][:, :1, :]
+    #     agent_vel = torch.cat([obs["agent_vel"], other_vel], dim=1)
+    # else:
+    #     other_vel = obs["other_vel"][:, 3:, :]
+
     obs = {
         "agent_pos": agents_absolute_pos,
         "agent_vel": torch.zeros_like(agents_absolute_pos),
@@ -205,46 +212,46 @@ class SimpleTagObjectiveSharing(Model):
         self.raw_feature_encoder = Encoder(16, 128).to(self.device)
         self.context_feature_encoder = Encoder(257, 32).to(self.device)
 
-        self.gnn_input_spec = Composite(
-            {
-                self.agent_group: Composite(
-                    {"input": Unbounded(shape=(self.n_agents, 128)), },
-                    shape=(self.n_agents,),
-                )
-            }
-        )
+        # self.gnn_input_spec = Composite(
+        #     {
+        #         self.agent_group: Composite(
+        #             {"input": Unbounded(shape=(self.n_agents, 128)), },
+        #             shape=(self.n_agents,),
+        #         )
+        #     }
+        # )
+        #
+        # self.gnn_output_spec = Composite(
+        #     {
+        #         self.agent_group: Composite(
+        #             {"output": Unbounded(shape=(self.n_agents, 128)), },
+        #             shape=(self.n_agents,),
+        #         )
+        #     }
+        # )
 
-        self.gnn_output_spec = Composite(
-            {
-                self.agent_group: Composite(
-                    {"output": Unbounded(shape=(self.n_agents, 128)), },
-                    shape=(self.n_agents,),
-                )
-            }
-        )
-
-        self.agents_agents_gnn = Gnn(topology="from_pos",
-                                     edge_radius=0.5,
-                                     self_loops=True,
-                                     gnn_class=torch_geometric.nn.conv.GATv2Conv,
-                                     gnn_kwargs={"heads": 1},
-                                     position_key="agent_pos",
-                                     exclude_pos_from_node_features=True,
-                                     velocity_key=None,
-                                     pos_features=2,
-                                     vel_features=0,
-                                     agent_group=self.agent_group,
-                                     input_has_agent_dim=self.input_has_agent_dim,
-                                     n_agents=self.n_agents,
-                                     centralised=self.centralised,
-                                     share_params=self.share_params,
-                                     device=self.device,
-                                     is_critic=self.is_critic,
-                                     input_spec=self.gnn_input_spec,
-                                     output_spec=self.gnn_output_spec,
-                                     action_spec=self.action_spec,
-                                     model_index=self.model_index,
-                                     )
+        # self.agents_agents_gnn = Gnn(topology="from_pos",
+        #                              edge_radius=0.5,
+        #                              self_loops=True,
+        #                              gnn_class=torch_geometric.nn.conv.GATv2Conv,
+        #                              gnn_kwargs={"heads": 1},
+        #                              position_key="agent_pos",
+        #                              exclude_pos_from_node_features=True,
+        #                              velocity_key=None,
+        #                              pos_features=2,
+        #                              vel_features=0,
+        #                              agent_group=self.agent_group,
+        #                              input_has_agent_dim=self.input_has_agent_dim,
+        #                              n_agents=self.n_agents,
+        #                              centralised=self.centralised,
+        #                              share_params=self.share_params,
+        #                              device=self.device,
+        #                              is_critic=self.is_critic,
+        #                              input_spec=self.gnn_input_spec,
+        #                              output_spec=self.gnn_output_spec,
+        #                              action_spec=self.action_spec,
+        #                              model_index=self.model_index,
+        #                              )
 
         self.final_mlp_input_spec = Composite(
             {
@@ -273,9 +280,10 @@ class SimpleTagObjectiveSharing(Model):
         )
 
         self.graph_encoder = TagContrastiveModel(self.device).to(device=self.device)
+        BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
+        model_path = BASE_DIR / "Tasks/SimpleTag/contrastive_model/tag_dict_contrastive_model_full.pth"
         self.graph_encoder.load_state_dict(
-            torch.load(
-                "./Tasks/SimpleTag/contrastive_model/tag_dict_contrastive_model_full.pth"))
+            torch.load(model_path))
         self.graph_encoder.eval()
 
     def _perform_checks(self):
@@ -347,27 +355,21 @@ class SimpleTagObjectiveSharing(Model):
 
             # agents feature encoding
             agents_features = torch.cat([
-                agents_pos,
-                agents_vel,
-                other_pos,
-                other_vel,
-                entity_pos,
-            ], dim=2).view(batch_size, 4, -1)
+                obs["agent_pos"],
+                obs["agent_vel"],
+                obs["other_pos"],
+                obs["other_vel"],
+                obs["entity_pos"],
+            ], dim=2).view(batch_size, self.n_agents, -1)
 
-            if self.agent_group == "adversary":
-                agents_features = agents_features[:, :3, :]
-                agents_pos = agents_pos[:, :3, :]
-            else:
-                agents_features = agents_features[:, 3:, :]
-                agents_pos = agents_pos[:, 3:, :]
+            h_agents_graph = self.raw_feature_encoder.forward(agents_features)
 
-            h_agents_features_enc = self.raw_feature_encoder.forward(agents_features)
-
-            gnn_input = TensorDict({self.agent_group: {
-                "agent_pos": agents_pos,
-                "input": h_agents_features_enc}}, )
-
-            h_agents_graph = self.agents_agents_gnn.forward(gnn_input)
+            # if self.agent_group == "adversary":
+            #     gnn_input = TensorDict({self.agent_group: {
+            #         "agent_pos": obs["agent_pos"],
+            #         "input": h_agents_graph}}, )
+            #
+            #     h_agents_graph = self.agents_agents_gnn.forward(gnn_input)
 
             context_features = torch.cat(
                 [
@@ -383,7 +385,8 @@ class SimpleTagObjectiveSharing(Model):
             agents_final_features = torch.cat(
                 [
                     context_encoded,
-                    h_agents_graph.get((self.agent_group, "output"))
+                    # h_agents_graph.get((self.agent_group, "output")) if self.agent_group == "adversary" else h_agents_graph,
+                    h_agents_graph,
                 ], dim=2)
 
             mlp_input = TensorDict({self.agent_group: {
