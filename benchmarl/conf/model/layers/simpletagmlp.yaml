@@ -1,4 +1,5 @@
-name: simplespreadmlp
+
+name: simpletagmlp
 
 num_cells: [256, 256]
 layer_class: torch.nn.Linear

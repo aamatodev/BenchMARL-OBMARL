@@ -8,26 +8,16 @@ from dataclasses import dataclass
 from typing import Dict, Any
 import time
 import copy
-from benchmarl.environments import MAgentTask
+
+from benchmarl.environments import VmasTask
+from benchmarl.environments.vmas import simple_tag
 from benchmarl.experiment.experiment import ExperimentConfig
 from benchmarl.algorithms.common import AlgorithmConfig, Algorithm
 from benchmarl.models.common import ModelConfig
-from benchmarl.utils import seed_everything
-from benchmarl.algorithms import VdnConfig
-from benchmarl.models import (
-    SequenceModelConfig,
-    GnnConfig,
-    MlpConfig,
-    CnnConfig,
-    SelectiveGnnConfig,
-    GumbelSelectiveGnnConfig,
-    GnnTwoLayersConfig,
-)
 from benchmarl.experiment.logger import Logger
 from torchrl.envs.utils import set_exploration_type, ExplorationType
 from torchrl.record.loggers import generate_exp_name
 from benchmarl.utils import seed_everything
-
 
 _has_hydra = importlib.util.find_spec("hydra") is not None
 if _has_hydra:
@@ -57,17 +47,19 @@ class MultiAlgorithmEvaluation:
     """
 
     def __init__(
-        self,
-        task: MAgentTask,  # or any multi-agent Task
-        group_algorithm_configs: Dict[str, AlgorithmConfig],
-        group_model_configs: Dict[str, ModelConfig],
-        seed: int,
-        config: MultiAlgorithmEvaluationConfig,
-        name: str
+            self,
+            task: VmasTask.SIMPLE_TAG_GRAPH,  # or any multi-agent Task
+            group_algorithm_configs: Dict[str, AlgorithmConfig],
+            group_model_configs: Dict[str, ModelConfig],
+            # group_action_spaces: Dict[str, Any],
+            seed: int,
+            config: MultiAlgorithmEvaluationConfig,
+            name: str
     ):
         self.task = task
         self.group_algorithm_configs = group_algorithm_configs
         self.group_model_configs = group_model_configs
+        # self.group_action_spaces = group_action_spaces
         self.seed = seed
         self.config = config
         self.env = None
@@ -102,6 +94,7 @@ class MultiAlgorithmEvaluation:
             seed=self.seed,
             device=self.config.sampling_device
         )()
+
         self.group_map = self.task.group_map(self.env)
         self.max_steps = self.task.max_steps(self.env)
 
@@ -113,6 +106,7 @@ class MultiAlgorithmEvaluation:
                 model_config=self.group_model_configs[group],
                 algorithm_config=self.group_algorithm_configs[group],
             )
+
             algo = self.group_algorithm_configs[group].get_algorithm(stub)
             self.group_algorithms[group] = algo
 
@@ -162,9 +156,9 @@ class MultiAlgorithmEvaluation:
             self.folder_name = save_folder / self.name
 
         if (
-            len(self.config.loggers)
-            or self.config.checkpoint_interval > 0
-            or self.config.create_json
+                len(self.config.loggers)
+                or self.config.checkpoint_interval > 0
+                or self.config.create_json
         ):
             self.folder_name.mkdir(parents=False, exist_ok=True)
 
@@ -181,8 +175,6 @@ class MultiAlgorithmEvaluation:
             group_map=self.group_map,
             seed=self.seed,
         )
-
-
 
     def _build_joint_policy(self):
         """
@@ -249,7 +241,6 @@ class MultiAlgorithmEvaluation:
             total_frames=self.total_frames,
         )
 
-
     def load_state_dict(self, merged_dict: dict):
         """
         Merge partial sub-dicts for each group: e.g. "loss_predator" => self.losses["predator"].load_state_dict(...)
@@ -257,13 +248,18 @@ class MultiAlgorithmEvaluation:
         """
         for group in self.group_map:
             # e.g. "loss_predator"
-            lk = f"loss_{group}"
+            lk = f"loss_{group}"  # loss agent is wrong
             if lk in merged_dict:
                 self.losses[group].load_state_dict(merged_dict[lk])
 
             bk = f"buffer_{group}"
             if bk in merged_dict and merged_dict[bk] is not None:
                 self.replay_buffers[group].load_state_dict(merged_dict[bk])
+
+        self.total_time = merged_dict["state"]["total_time"]
+        self.total_frames = merged_dict["state"]["total_frames"]
+        self.n_iters_performed = merged_dict["state"]["n_iters_performed"]
+        self.mean_return = merged_dict["state"]["mean_return"]
 
     def close(self):
         if self.env is not None:

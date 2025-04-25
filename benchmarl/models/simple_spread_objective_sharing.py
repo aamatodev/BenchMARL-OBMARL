@@ -143,13 +143,13 @@ class SimpleSpreadObjectiveSharing(Model):
 
         self.raw_feature_encoder = Encoder(self.input_features, 128).to(self.device)
         self.context_feature_encoder = Encoder(257, 32).to(self.device)
-        # self.node_feature_encoder = Encoder(277, 128).to(self.device)
+        self.node_feature_encoder = Encoder(277, 128).to(self.device)
 
-        # self.agents_entity_gnn = GATv2Conv(128, 128, 2, edge_dim=3).to(self.device)
-        # self.agents_agents_gnn = GATv2Conv(128, 128, 2, edge_dim=3).to(self.device)
+        self.agents_entity_gnn = GATv2Conv(128, 128, 2, edge_dim=3).to(self.device)
+        self.agents_agents_gnn = GATv2Conv(128, 128, 2, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=160,
+            n_agent_inputs=288,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -157,7 +157,7 @@ class SimpleSpreadObjectiveSharing(Model):
             device=self.device,
             activation_class=activation_class,
             depth=2,
-            num_cells=[128, 32],
+            num_cells=[256, 256],
         )
 
         self.graph_encoder = SCLModel(self.device).to(device=self.device)
@@ -199,7 +199,7 @@ class SimpleSpreadObjectiveSharing(Model):
 
             c_reward = torch.zeros_like(distance)  # Initialize reward tensor
 
-            stability_threshold = 1  # Distance where stability reward applies
+            stability_threshold = 0.5  # Distance where stability reward applies
 
             # Reward before reaching the stable zone (Linear Decay)
             c_reward[distance < self.threshold] = self.threshold - distance[distance < self.threshold]
@@ -220,21 +220,21 @@ class SimpleSpreadObjectiveSharing(Model):
             #
             h_agents_features_enc = self.raw_feature_encoder.forward(agents_features)
 
-            # # agents gnn
-            # h_only_agents_unrolled = h_agents_features_enc.view(-1, 128)
-            # agents_pos_unrolled = agents_pos.view(-1, 2)
-            #
-            # agents_graph = generate_graph(batch_size=batch_size,
-            #                               node_features=h_only_agents_unrolled,
-            #                               node_pos=agents_pos_unrolled,
-            #                               edge_attr=None,
-            #                               n_agents=self.n_agents,
-            #                               use_radius=True,
-            #                               device=self.device)
-            #
-            # h_agents_graph = self.agents_agents_gnn.forward(agents_graph.x,
-            #                                                 agents_graph.edge_index,
-            #                                                 agents_graph.edge_attr).view(batch_size, self.n_agents, -1)
+            # agents gnn
+            h_only_agents_unrolled = h_agents_features_enc.view(-1, 128)
+            agents_pos_unrolled = agents_pos.view(-1, 2)
+
+            agents_graph = generate_graph(batch_size=batch_size,
+                                          node_features=h_only_agents_unrolled,
+                                          node_pos=agents_pos_unrolled,
+                                          edge_attr=None,
+                                          n_agents=self.n_agents,
+                                          use_radius=True,
+                                          device=self.device)
+
+            h_agents_graph = self.agents_agents_gnn.forward(agents_graph.x,
+                                                            agents_graph.edge_index,
+                                                            agents_graph.edge_attr).view(batch_size, self.n_agents, -1)
 
             context_features = torch.cat(
                 [
@@ -250,7 +250,7 @@ class SimpleSpreadObjectiveSharing(Model):
             agents_final_features = torch.cat(
                 [
                     context_encoded,
-                    h_agents_features_enc
+                    h_agents_graph
                 ], dim=2)
 
             res = self.final_mlp(agents_final_features.view(batch_size, self.n_agents, -1))
