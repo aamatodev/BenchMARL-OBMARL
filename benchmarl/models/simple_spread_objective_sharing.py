@@ -10,6 +10,7 @@ import torch_geometric
 from torch_geometric.nn import GATv2Conv
 
 from cmodels.scl_model import SCLModel
+from cmodels.scl_model_v4 import SCLModelV4
 from torchrl.data import Composite, Unbounded
 
 from benchmarl.models import Gnn, GnnConfig, DeepsetsConfig, Deepsets
@@ -117,6 +118,7 @@ class SimpleSpreadObjectiveSharing(Model):
             self,
             activation_class: Type[nn.Module],
             threshold: float,
+            stability: float,
             num_cells: Sequence[int] = MISSING,
             layer_class: Type[nn.Module] = MISSING,
             **kwargs,
@@ -142,13 +144,14 @@ class SimpleSpreadObjectiveSharing(Model):
         ) - self.n_agents * 2  # we remove the "landmark_pos" from the input features
         self.activation_class = activation_class
         self.threshold = threshold
+        self.stability = stability
 
-        self.context_feature_encoder = Encoder(257, 32).to(self.device)
+        # self.context_feature_encoder = Encoder(257, 32).to(self.device)
 
         self.agents_agents_gnn = GATv2Conv(128, 128, 2, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=46,
+            n_agent_inputs=47,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -159,9 +162,9 @@ class SimpleSpreadObjectiveSharing(Model):
             num_cells=num_cells,
         )
 
-        self.graph_encoder = SCLModel(self.device).to(device=self.device)
+        self.graph_encoder = SCLModelV4(self.device).to(device=self.device)
         BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
-        model_path = BASE_DIR / "contrastive_learning/state_dict_100_v1.pth"
+        model_path = BASE_DIR / "contrastive_learning/state_dict_v4.pth"
 
         self.graph_encoder.load_state_dict(torch.load(model_path))
         self.graph_encoder.eval()
@@ -198,7 +201,7 @@ class SimpleSpreadObjectiveSharing(Model):
 
             c_reward = torch.zeros_like(distance)  # Initialize reward tensor
 
-            stability_threshold = 0.5  # Distance where stability reward applies
+            stability_threshold = self.stability  # Distance where stability reward applies
 
             # Reward before reaching the stable zone (Linear Decay)
             c_reward[distance < self.threshold] = self.threshold - distance[distance < self.threshold]
@@ -221,14 +224,14 @@ class SimpleSpreadObjectiveSharing(Model):
                     distance,
                 ], dim=2)
 
-            context_encoded = self.context_feature_encoder.forward(context_features).view(batch_size,
-                                                                                          self.n_agents,
-                                                                                          -1)
+            # context_encoded = self.context_feature_encoder.forward(context_features).view(batch_size,
+            #                                                                               self.n_agents,
+            #                                                                               -1)
 
             agents_final_features = torch.cat(
                 [
                     agents_features,
-                    context_encoded,
+                    context_features,
                 ], dim=2)
 
             res = self.final_mlp(agents_final_features.view(batch_size, self.n_agents, -1))
@@ -251,6 +254,7 @@ class SimpleSpreadObjectiveSharingConfig(ModelConfig):
     norm_kwargs: Optional[dict] = None
 
     threshold: float = 12.0
+    stability: float = 0.2
 
     @staticmethod
     def associated_class():
