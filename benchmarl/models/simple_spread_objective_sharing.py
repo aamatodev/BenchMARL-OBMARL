@@ -10,7 +10,7 @@ import torch_geometric
 from torch_geometric.nn import GATv2Conv
 
 from cmodels.scl_model import SCLModel
-from cmodels.scl_model_v4 import SCLModelV4
+from cmodels.scl_model_v5 import SCLModelV5
 from torchrl.data import Composite, Unbounded
 
 from benchmarl.models import Gnn, GnnConfig, DeepsetsConfig, Deepsets
@@ -151,7 +151,7 @@ class SimpleSpreadObjectiveSharing(Model):
         self.agents_agents_gnn = GATv2Conv(128, 128, 2, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=47,
+            n_agent_inputs=14,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -162,11 +162,11 @@ class SimpleSpreadObjectiveSharing(Model):
             num_cells=num_cells,
         )
 
-        self.graph_encoder = SCLModelV4(self.device).to(device=self.device)
+        # self.graph_encoder = SCLModelV5(self.device).to(device=self.device)
         BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
-        model_path = BASE_DIR / "contrastive_learning/state_dict_v4.pth"
+        model_path = BASE_DIR / "contrastive_learning/siamese_model_final.pth"
 
-        self.graph_encoder.load_state_dict(torch.load(model_path))
+        self.graph_encoder = torch.load(model_path).to(device=self.device)
         self.graph_encoder.eval()
 
     def _perform_checks(self):
@@ -185,30 +185,30 @@ class SimpleSpreadObjectiveSharing(Model):
             with torch.no_grad():
                 h_agent_graph_metric = self.graph_encoder(tensordict.get("agents")["observation"])
 
-            # create obs for agents in objective position and objective
-            obs = dict()
-            obs["agent_pos"] = objective_pos.view(-1, self.n_agents, 2)
-            obs["landmark_pos"] = landmark_pos
-            obs["agent_vel"] = objective_vel.view(batch_size, self.n_agents, 2)
-            obs["relative_landmark_pos"] = objective_relative_landmarks_pos
-            obs["other_pos"] = objective_relative_other_pos
-
-            with torch.no_grad():
-                h_objective_graph_metric = self.graph_encoder(obs)
-
-            distance = torch.pairwise_distance(h_agent_graph_metric, h_objective_graph_metric,
-                                               keepdim=True).unsqueeze(1).repeat(1, self.n_agents, 1)
-
-            c_reward = torch.zeros_like(distance)  # Initialize reward tensor
-
-            stability_threshold = self.stability  # Distance where stability reward applies
-
-            # Reward before reaching the stable zone (Linear Decay)
-            c_reward[distance < self.threshold] = self.threshold - distance[distance < self.threshold]
-
-            # Smooth transition to stable reward (Linear instead of exponential)
-            close_enough = distance < stability_threshold
-            c_reward[close_enough] = 100
+            # # create obs for agents in objective position and objective
+            # obs = dict()
+            # obs["agent_pos"] = objective_pos.view(-1, self.n_agents, 2)
+            # obs["landmark_pos"] = landmark_pos
+            # obs["agent_vel"] = objective_vel.view(batch_size, self.n_agents, 2)
+            # obs["relative_landmark_pos"] = objective_relative_landmarks_pos
+            # obs["other_pos"] = objective_relative_other_pos
+            #
+            # with torch.no_grad():
+            #     h_objective_graph_metric = self.graph_encoder(obs)
+            #
+            # distance = torch.pairwise_distance(h_agent_graph_metric, h_objective_graph_metric,
+            #                                    keepdim=True).unsqueeze(1).repeat(1, self.n_agents, 1)
+            #
+            # c_reward = torch.zeros_like(distance)  # Initialize reward tensor
+            #
+            # stability_threshold = self.stability  # Distance where stability reward applies
+            #
+            # # Reward before reaching the stable zone (Linear Decay)
+            # c_reward[distance < self.threshold] = self.threshold - distance[distance < self.threshold]
+            #
+            # # Smooth transition to stable reward (Linear instead of exponential)
+            # close_enough = distance < stability_threshold
+            # c_reward[close_enough] = 100
 
             # agents feature encoding
             agents_features = torch.cat([
@@ -217,12 +217,12 @@ class SimpleSpreadObjectiveSharing(Model):
                 relative_landmarks_pos,
                 relative_other_pos], dim=2).view(batch_size, self.n_agents, -1)
 
-            context_features = torch.cat(
-                [
-                    h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
-                    h_objective_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
-                    distance,
-                ], dim=2)
+            # context_features = torch.cat(
+            #     [
+            #         h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
+            #         h_objective_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
+            #         distance,
+            #     ], dim=2)
 
             # context_encoded = self.context_feature_encoder.forward(context_features).view(batch_size,
             #                                                                               self.n_agents,
@@ -231,13 +231,13 @@ class SimpleSpreadObjectiveSharing(Model):
             agents_final_features = torch.cat(
                 [
                     agents_features,
-                    context_features,
+                    # context_features,
                 ], dim=2)
 
             res = self.final_mlp(agents_final_features.view(batch_size, self.n_agents, -1))
 
         tensordict.set(self.out_keys[0], res)
-        tensordict.set(self.out_keys[1], c_reward)
+        tensordict.set(self.out_keys[1], h_agent_graph_metric.view(batch_size, 1, 1).repeat(1, 3, 1))
 
         return tensordict
 
