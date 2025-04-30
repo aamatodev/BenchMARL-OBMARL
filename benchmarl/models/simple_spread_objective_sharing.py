@@ -237,7 +237,7 @@ class SimpleSpreadObjectiveSharing(Model):
             res = self.final_mlp(agents_final_features.view(batch_size, self.n_agents, -1))
 
         tensordict.set(self.out_keys[0], res)
-        tensordict.set(self.out_keys[1], h_agent_graph_metric.view(batch_size, 1, 1).repeat(1, 3, 1))
+        tensordict.set(self.out_keys[1], 1 - h_agent_graph_metric.view(batch_size, 1, 1).repeat(1, 3, 1))
 
         return tensordict
 

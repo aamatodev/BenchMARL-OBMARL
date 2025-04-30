@@ -156,7 +156,14 @@ class SimpleSpreadMlp(Model):
 
     def _forward(self, tensordict: TensorDictBase) -> TensorDictBase:
 
-        input = torch.cat([tensordict.get(in_key) for in_key in self.reduced_keys], dim=-1)
+        agents_pos, agents_vel, landmark_pos, relative_landmarks_pos, relative_other_pos = extract_features_from_obs(
+            tensordict.get("agents")["observation"])
+
+        input = torch.cat([
+            agents_pos,
+            agents_vel,
+            relative_landmarks_pos,
+            relative_other_pos], dim=-1)
 
         # generate objectives and current statuses
 
