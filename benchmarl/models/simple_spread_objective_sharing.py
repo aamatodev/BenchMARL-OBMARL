@@ -164,10 +164,10 @@ class SimpleSpreadObjectiveSharing(Model):
 
         # self.graph_encoder = SCLModelV5(self.device).to(device=self.device)
         BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
-        model_path = BASE_DIR / "contrastive_learning/siamese_model_final.pth"
+        model_path = BASE_DIR / "contrastive_learning/cosine_model.pth"
 
-        self.graph_encoder = torch.load(model_path).to(device=self.device)
-        self.graph_encoder.eval()
+        self.contrastive_model = torch.load(model_path).to(device=self.device)
+        self.contrastive_model.eval()
 
     def _perform_checks(self):
         super()._perform_checks()
@@ -179,36 +179,12 @@ class SimpleSpreadObjectiveSharing(Model):
                 tensordict.get("agents")["observation"])
             batch_size = agents_pos.shape[:-2][0]
 
-            objective_pos, objective_vel, objective_relative_landmarks_pos, objective_relative_other_pos = generate_objective_node_features(
-                landmark_pos, self.n_agents)
-
             with torch.no_grad():
-                h_agent_graph_metric = self.graph_encoder(tensordict.get("agents")["observation"])
+                final_emb, h_state_emb, h_object_emb = self.contrastive_model(tensordict.get("agents")["observation"])
 
-            # # create obs for agents in objective position and objective
-            # obs = dict()
-            # obs["agent_pos"] = objective_pos.view(-1, self.n_agents, 2)
-            # obs["landmark_pos"] = landmark_pos
-            # obs["agent_vel"] = objective_vel.view(batch_size, self.n_agents, 2)
-            # obs["relative_landmark_pos"] = objective_relative_landmarks_pos
-            # obs["other_pos"] = objective_relative_other_pos
-            #
-            # with torch.no_grad():
-            #     h_objective_graph_metric = self.graph_encoder(obs)
-            #
-            # distance = torch.pairwise_distance(h_agent_graph_metric, h_objective_graph_metric,
-            #                                    keepdim=True).unsqueeze(1).repeat(1, self.n_agents, 1)
-            #
-            # c_reward = torch.zeros_like(distance)  # Initialize reward tensor
-            #
-            # stability_threshold = self.stability  # Distance where stability reward applies
-            #
-            # # Reward before reaching the stable zone (Linear Decay)
-            # c_reward[distance < self.threshold] = self.threshold - distance[distance < self.threshold]
-            #
-            # # Smooth transition to stable reward (Linear instead of exponential)
-            # close_enough = distance < stability_threshold
-            # c_reward[close_enough] = 100
+            similarity = torch.nn.functional.cosine_similarity(h_state_emb,
+                                                               h_object_emb,
+                                                               dim=-1).unsqueeze(1).repeat(1, self.n_agents, 1)
 
             # agents feature encoding
             agents_features = torch.cat([
@@ -216,17 +192,6 @@ class SimpleSpreadObjectiveSharing(Model):
                 agents_vel,
                 relative_landmarks_pos,
                 relative_other_pos], dim=2).view(batch_size, self.n_agents, -1)
-
-            # context_features = torch.cat(
-            #     [
-            #         h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
-            #         h_objective_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
-            #         distance,
-            #     ], dim=2)
-
-            # context_encoded = self.context_feature_encoder.forward(context_features).view(batch_size,
-            #                                                                               self.n_agents,
-            #                                                                               -1)
 
             agents_final_features = torch.cat(
                 [
@@ -237,7 +202,7 @@ class SimpleSpreadObjectiveSharing(Model):
             res = self.final_mlp(agents_final_features.view(batch_size, self.n_agents, -1))
 
         tensordict.set(self.out_keys[0], res)
-        tensordict.set(self.out_keys[1], 1 - h_agent_graph_metric.view(batch_size, 1, 1).repeat(1, 3, 1))
+        tensordict.set(self.out_keys[1], similarity)
 
         return tensordict
 
