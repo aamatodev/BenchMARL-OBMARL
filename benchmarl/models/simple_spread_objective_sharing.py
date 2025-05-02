@@ -166,7 +166,7 @@ class SimpleSpreadObjectiveSharing(Model):
         BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
         model_path = BASE_DIR / "contrastive_learning/cosine_model.pth"
 
-        self.contrastive_model = torch.load(model_path).to(device=self.device)
+        self.contrastive_model = torch.load("/home/aamato/Documents/marl/objective-based-marl/contrastive_learning/cosine_model.pth").to(device=self.device)
         self.contrastive_model.eval()
 
     def _perform_checks(self):
@@ -201,8 +201,11 @@ class SimpleSpreadObjectiveSharing(Model):
 
             res = self.final_mlp(agents_final_features.view(batch_size, self.n_agents, -1))
 
+        eps = 1e-8  # tiny constant to stay strictly >0
+        reward = -torch.log(1.0 - similarity + eps)
+
         tensordict.set(self.out_keys[0], res)
-        tensordict.set(self.out_keys[1], similarity)
+        tensordict.set(self.out_keys[1], reward)
 
         return tensordict
 

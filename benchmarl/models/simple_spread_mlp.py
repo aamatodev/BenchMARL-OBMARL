@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, MISSING
+from pathlib import Path
 from typing import Optional, Sequence, Type
 
 import torch
@@ -85,7 +86,6 @@ class SimpleSpreadMlp(Model):
             model_index=kwargs.pop("model_index"),
             is_critic=kwargs.pop("is_critic"),
         )
-
         # self.in_keys.remove(('agents', 'observation', 'landmark_pos'))
         self.reduced_keys = self.in_keys.copy()
         self.reduced_keys.remove(('agents', 'observation', 'landmark_pos'))
@@ -98,7 +98,7 @@ class SimpleSpreadMlp(Model):
 
         if self.input_has_agent_dim:
             self.mlp = MultiAgentMLP(
-                n_agent_inputs=self.input_features,
+                n_agent_inputs=47,
                 n_agent_outputs=self.output_features,
                 n_agents=self.n_agents,
                 centralised=self.centralised,
@@ -119,6 +119,11 @@ class SimpleSpreadMlp(Model):
                 ]
             )
 
+        BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
+        model_path = BASE_DIR / "contrastive_learning/cosine_model.pth"
+
+        self.contrastive_model = torch.load(model_path).to(device=self.device)
+        self.contrastive_model.eval()
 
     def _perform_checks(self):
         super()._perform_checks()
@@ -158,14 +163,35 @@ class SimpleSpreadMlp(Model):
 
         agents_pos, agents_vel, landmark_pos, relative_landmarks_pos, relative_other_pos = extract_features_from_obs(
             tensordict.get("agents")["observation"])
+        batch_size = agents_pos.shape[:-2][0]
 
-        input = torch.cat([
-            agents_pos,
-            agents_vel,
-            relative_landmarks_pos,
-            relative_other_pos], dim=-1)
+        with torch.no_grad():
+            final_emb, h_state_emb, h_object_emb = self.contrastive_model(tensordict.get("agents")["observation"])
 
-        # generate objectives and current statuses
+        similarity = torch.nn.functional.cosine_similarity(h_state_emb,
+                                                           h_object_emb,
+                                                           dim=-1).unsqueeze(1).repeat(1, self.n_agents, 1)
+
+        input = torch.cat([tensordict.get(in_key) for in_key in self.reduced_keys], dim=-1)
+
+        context = torch.cat([
+            h_state_emb.repeat(1, self.n_agents, 1),
+            h_object_emb.repeat(1, self.n_agents, 1),
+            similarity], dim=-1)
+
+        shape = []
+        for element in tensordict.get("agents")["observation"].shape:
+            shape.append(element)
+        shape.append(-1)
+        context = context.view(tuple(shape))
+
+        input = torch.cat(
+            [
+                input,
+                context
+            ],
+            dim=-1,
+        )
 
         # Has multi-agent input dimension
         if self.input_has_agent_dim:
