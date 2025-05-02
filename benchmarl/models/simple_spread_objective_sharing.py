@@ -151,7 +151,7 @@ class SimpleSpreadObjectiveSharing(Model):
         self.agents_agents_gnn = GATv2Conv(128, 128, 2, edge_dim=3).to(self.device)
 
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=14,
+            n_agent_inputs=47,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -193,19 +193,21 @@ class SimpleSpreadObjectiveSharing(Model):
                 relative_landmarks_pos,
                 relative_other_pos], dim=2).view(batch_size, self.n_agents, -1)
 
+            context_features = torch.cat([
+                h_state_emb.repeat(1, self.n_agents, 1),
+                h_object_emb.repeat(1, self.n_agents, 1),
+                similarity], dim=2).view(batch_size, self.n_agents, -1)
+
             agents_final_features = torch.cat(
                 [
                     agents_features,
-                    # context_features,
+                    context_features,
                 ], dim=2)
 
             res = self.final_mlp(agents_final_features.view(batch_size, self.n_agents, -1))
 
-        eps = 1e-8  # tiny constant to stay strictly >0
-        reward = -torch.log(1.0 - similarity + eps)
-
         tensordict.set(self.out_keys[0], res)
-        tensordict.set(self.out_keys[1], reward)
+        tensordict.set(self.out_keys[1], similarity)
 
         return tensordict
 
