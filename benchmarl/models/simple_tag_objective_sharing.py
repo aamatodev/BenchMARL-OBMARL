@@ -187,7 +187,6 @@ class SimpleTagObjectiveSharing(Model):
     def __init__(
             self,
             activation_class: Type[nn.Module],
-            threshold: float,
             **kwargs,
     ):
         # Remember the kwargs to the super() class
@@ -207,7 +206,7 @@ class SimpleTagObjectiveSharing(Model):
 
         self.output_features = self.output_leaf_spec.shape[-1]
         self.activation_class = activation_class
-        self.threshold = threshold
+        self.num_cells = kwargs.pop("num_cells", [256, 256])
 
         self.raw_feature_encoder = Encoder(16, 128).to(self.device)
         self.context_feature_encoder = Encoder(257, 32).to(self.device)
@@ -275,8 +274,7 @@ class SimpleTagObjectiveSharing(Model):
             model_index=self.model_index,
             is_critic=self.is_critic,
             activation_class=activation_class,
-            depth=2,
-            num_cells=[128, 32],
+            num_cells=self.num_cells,
         )
 
         self.graph_encoder = TagContrastiveModel(self.device).to(device=self.device)
@@ -336,22 +334,12 @@ class SimpleTagObjectiveSharing(Model):
             }
 
             with torch.no_grad():
-                h_objective_graph_metric = self.graph_encoder(obj_obs_dict, (
+                final_emb, state_emb, obj_emb = self.graph_encoder(obj_obs_dict, (
                     objective_pos, objective_vel, relative_other_pos, relative_prey_pos))
 
-            distance = torch.pairwise_distance(h_agent_graph_metric, h_objective_graph_metric,
-                                               keepdim=True).unsqueeze(1).repeat(1, self.n_agents, 1)
-
-            c_reward = torch.zeros_like(distance)  # Initialize reward tensor
-
-            stability_threshold = 1  # Distance where stability reward applies
-
-            # Reward before reaching the stable zone (Linear Decay)
-            c_reward[distance < self.threshold] = self.threshold - distance[distance < self.threshold]
-
-            # Smooth transition to stable reward (Linear instead of exponential)
-            close_enough = distance < stability_threshold
-            c_reward[close_enough] = 100
+            similarity = torch.nn.functional.cosine_similarity(state_emb,
+                                                               obj_emb,
+                                                               dim=-1).unsqueeze(1).repeat(1, self.n_agents, 1)
 
             # agents feature encoding
             agents_features = torch.cat([
@@ -362,31 +350,21 @@ class SimpleTagObjectiveSharing(Model):
                 obs["entity_pos"],
             ], dim=2).view(batch_size, self.n_agents, -1)
 
-            h_agents_graph = self.raw_feature_encoder.forward(agents_features)
-
-            # if self.agent_group == "adversary":
-            #     gnn_input = TensorDict({self.agent_group: {
-            #         "agent_pos": obs["agent_pos"],
-            #         "input": h_agents_graph}}, )
-            #
-            #     h_agents_graph = self.agents_agents_gnn.forward(gnn_input)
-
             context_features = torch.cat(
                 [
-                    h_agent_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
-                    h_objective_graph_metric.unsqueeze(1).repeat(1, self.n_agents, 1),
-                    distance
+                    state_emb.unsqueeze(1).repeat(1, self.n_agents, 1),
+                    obj_emb.unsqueeze(1).repeat(1, self.n_agents, 1),
+                    similarity.view(batch_size, self.n_agents, -1),
                 ], dim=2)
 
-            context_encoded = self.context_feature_encoder.forward(context_features.view(-1, 257)).view(batch_size,
-                                                                                                        self.n_agents,
-                                                                                                        -1)
+            # context_encoded = self.context_feature_encoder.forward(context_features.view(-1, 257)).view(batch_size,
+            #                                                                                             self.n_agents,
+            #                                                                                             -1)
 
             agents_final_features = torch.cat(
                 [
-                    context_encoded,
-                    # h_agents_graph.get((self.agent_group, "output")) if self.agent_group == "adversary" else h_agents_graph,
-                    h_agents_graph,
+                    agents_features,
+                    context_features,
                 ], dim=2)
 
             mlp_input = TensorDict({self.agent_group: {
@@ -395,7 +373,7 @@ class SimpleTagObjectiveSharing(Model):
             res = self.final_mlp(mlp_input)
 
         tensordict.set(self.out_keys[0], res.get((self.agent_group, "logits")))
-        tensordict.set(self.out_keys[1], c_reward if self.agent_group == "adversary" else -c_reward)
+        tensordict.set(self.out_keys[1], similarity if self.agent_group == "adversary" else -similarity)
 
         return tensordict
 
@@ -404,7 +382,8 @@ class SimpleTagObjectiveSharing(Model):
 class SimpleTagObjectiveSharingConfig(ModelConfig):
     # The config parameters for this class, these will be loaded from yaml
     activation_class: Type[nn.Module] = MISSING
-    threshold: float = 12.0
+    num_cells: list[int] = MISSING
+    layer_class: Type[nn.Module] = MISSING
 
     @staticmethod
     def associated_class():
