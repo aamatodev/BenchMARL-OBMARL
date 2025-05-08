@@ -53,14 +53,12 @@ class SimpleTagMlp(Model):
             is_critic=kwargs.pop("is_critic"),
         )
 
-        self.input_features = sum(
-            [spec.shape[-1] for spec in self.input_spec.values(True, True)]
-        )
-        self.output_features = 49
+        self.input_features = 49
+        self.output_features = self.output_leaf_spec.shape[-1]
 
         if self.input_has_agent_dim:
             self.mlp = MultiAgentMLP(
-                n_agent_inputs=self.input_features if self.agent_group == "adversary" else self.input_features - 2,
+                n_agent_inputs=self.input_features,
                 n_agent_outputs=self.output_features,
                 n_agents=self.n_agents,
                 centralised=self.centralised,
@@ -123,7 +121,9 @@ class SimpleTagMlp(Model):
     def _forward(self, tensordict: TensorDictBase) -> TensorDictBase:
 
         obs = tensordict.get(self.agent_group)["observation"]
-        state_obs = get_state_from_obs(obs.view(-1, 3), self.agent_group)
+        if self.agent_group == "agent":
+            print("Agent group is agents")
+        state_obs = get_state_from_obs(obs.view(-1, self.n_agents), self.agent_group)
         with torch.no_grad():
             final_emb, state_emb, obj_emb = self.graph_encoder(state_obs)
 

@@ -28,6 +28,7 @@ class PettingZooTask(Task):
     SIMPLE_TAG = None
     SIMPLE_WORLD_COMM = None
     LBFORAGING = None
+    LOAD_BALANCING = None
 
     def get_env_fun(
         self,
@@ -77,7 +78,8 @@ class PettingZooTask(Task):
             PettingZooTask.SIMPLE_SPREAD,
             PettingZooTask.SIMPLE_TAG,
             PettingZooTask.SIMPLE_WORLD_COMM,
-            PettingZooTask.LBFORAGING
+            PettingZooTask.LBFORAGING,
+            PettingZooTask.LOAD_BALANCING,
         }:
             return True
         return False

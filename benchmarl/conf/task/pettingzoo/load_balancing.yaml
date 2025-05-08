@@ -1,0 +1,6 @@
+defaults:
+  - pettingzoo_load_balancing_config
+  - _self_
+
+task: "load_balancing"
+max_cycles: 100
