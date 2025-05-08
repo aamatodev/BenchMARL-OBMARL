@@ -7,9 +7,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, MISSING
+from pathlib import Path
 from typing import Optional, Sequence, Type
 
 import torch
+
+from benchmarl.models.simple_tag_objective_sharing import get_state_from_obs
 from tensordict import TensorDictBase
 from torch import nn
 from torchrl.modules import MLP, MultiAgentMLP
@@ -53,7 +56,7 @@ class SimpleTagMlp(Model):
         self.input_features = sum(
             [spec.shape[-1] for spec in self.input_spec.values(True, True)]
         )
-        self.output_features = self.output_leaf_spec.shape[-1]
+        self.output_features = 49
 
         if self.input_has_agent_dim:
             self.mlp = MultiAgentMLP(
@@ -77,6 +80,11 @@ class SimpleTagMlp(Model):
                     for _ in range(self.n_agents if not self.share_params else 1)
                 ]
             )
+
+        BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
+        model_path = BASE_DIR / "Tasks/SimpleTag/contrastive_model/tag_cosine_model.pth"
+        self.graph_encoder = torch.load(model_path).to(device=self.device)
+        self.graph_encoder.eval()
 
     def _perform_checks(self):
         super()._perform_checks()
@@ -113,20 +121,36 @@ class SimpleTagMlp(Model):
             )
 
     def _forward(self, tensordict: TensorDictBase) -> TensorDictBase:
-        if self.agent_group == "adversary":
-            keys = [(self.agent_group, "observation", "agent_vel"),
-                    (self.agent_group, "observation", "agent_pos"),
-                    (self.agent_group, "observation", "entity_pos"),
-                    (self.agent_group, "observation", "other_pos"),
-                    (self.agent_group, "observation", "other_vel")]
-        else:
-            keys = [(self.agent_group, "observation", "agent_vel"),
-                    (self.agent_group, "observation", "agent_pos"),
-                    (self.agent_group, "observation", "entity_pos"),
-                    (self.agent_group, "observation", "other_pos")]
 
-        # Gather in_key
-        input = torch.cat([tensordict.get(in_key) for in_key in keys], dim=-1)
+        obs = tensordict.get(self.agent_group)["observation"]
+        state_obs = get_state_from_obs(obs.view(-1, 3), self.agent_group)
+        with torch.no_grad():
+            final_emb, state_emb, obj_emb = self.graph_encoder(state_obs)
+
+        similarity = torch.nn.functional.cosine_similarity(state_emb,
+                                                           obj_emb,
+                                                           dim=-1).unsqueeze(1).repeat(1, self.n_agents, 1)
+
+        input = torch.cat([tensordict.get(in_key) for in_key in self.in_keys], dim=-1)
+
+        context = torch.cat([
+            state_emb.repeat(1, self.n_agents, 1),
+            obj_emb.repeat(1, self.n_agents, 1),
+            similarity], dim=-1)
+
+        shape = []
+        for element in tensordict.get(self.agent_group)["observation"].shape:
+            shape.append(element)
+        shape.append(-1)
+        context = context.view(tuple(shape))
+
+        input = torch.cat(
+            [
+                input,
+                context
+            ],
+            dim=-1,
+        )
 
         # Has multi-agent input dimension
         if self.input_has_agent_dim:

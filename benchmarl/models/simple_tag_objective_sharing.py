@@ -147,7 +147,7 @@ def get_state_from_obs(obs, agent_group):
         exclude = [s, s + 1]
         indices.append([j for j in range(2 * 4) if j not in exclude])
 
-    indices = torch.tensor(indices, device=obs.device)
+    indices = torch.tensor(indices, device=current_agents_pos.device)
     indices = indices.unsqueeze(0).expand(obs.shape[0], -1, -1)
 
     # if agent_group == "adversary":
@@ -255,7 +255,7 @@ class SimpleTagObjectiveSharing(Model):
         self.final_mlp_input_spec = Composite(
             {
                 self.agent_group: Composite(
-                    {"input": Unbounded(shape=(self.n_agents, 160)), },
+                    {"input": Unbounded(shape=(self.n_agents, 49)), },
                     shape=(self.n_agents,),
                 )
             }
@@ -277,11 +277,9 @@ class SimpleTagObjectiveSharing(Model):
             num_cells=self.num_cells,
         )
 
-        self.graph_encoder = TagContrastiveModel(self.device).to(device=self.device)
         BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
-        model_path = BASE_DIR / "Tasks/SimpleTag/contrastive_model/tag_dict_contrastive_model_full.pth"
-        self.graph_encoder.load_state_dict(
-            torch.load(model_path))
+        model_path = BASE_DIR / "Tasks/SimpleTag/contrastive_model/tag_cosine_model.pth"
+        self.graph_encoder = torch.load(model_path).to(device=self.device)
         self.graph_encoder.eval()
 
     def _perform_checks(self):
@@ -293,49 +291,11 @@ class SimpleTagObjectiveSharing(Model):
         if self.input_has_agent_dim:
             # merge groups obs
             obs = tensordict.get(self.agent_group)["observation"]
-
+            batch_size = obs.shape[0]
             state_obs = get_state_from_obs(obs, self.agent_group)
 
-            agents_pos, agents_vel, other_pos, other_vel, entity_pos = extract_features_from_obs(
-                state_obs)
-
-            agents_vel = torch.zeros(agents_pos.shape).to(agents_pos.device)
-            other_vel = torch.zeros(agents_pos.shape).to(other_pos.device)
-
-            batch_size = agents_pos.shape[:-2][0]
-
-            # create objective node features
-            objective_pos, objective_vel, relative_other_pos, relative_prey_pos = generate_objective_node_features(
-                agents_pos)
-
-            obs_dict = {
-                "agent_pos": agents_pos,
-                "agent_vel": agents_vel,
-                "other_pos": other_pos,
-                "other_vel": other_vel,
-                "entity_pos": entity_pos
-            }
-
             with torch.no_grad():
-                h_agent_graph_metric = self.graph_encoder(obs_dict, (
-                    objective_pos, objective_vel, relative_other_pos, relative_prey_pos))
-
-            # create obs for agents in objective position and objective
-
-            obj_obs_dict = {
-                "agent_pos": torch.cat([objective_pos, agents_pos[:, 3, :].unsqueeze(1)], dim=1),
-                "agent_vel": torch.zeros(batch_size, 4, 2).to(agents_pos.device),
-                "other_pos": torch.cat([torch.cat([relative_other_pos, relative_prey_pos], dim=2),
-                                        (objective_pos[:, :3, :].reshape(batch_size, -1) - agents_pos[:, 3, :].repeat(1,
-                                                                                                                      3)).unsqueeze(
-                                            1)], dim=1),
-                "other_vel": other_vel,
-                "entity_pos": entity_pos
-            }
-
-            with torch.no_grad():
-                final_emb, state_emb, obj_emb = self.graph_encoder(obj_obs_dict, (
-                    objective_pos, objective_vel, relative_other_pos, relative_prey_pos))
+                final_emb, state_emb, obj_emb = self.graph_encoder(state_obs)
 
             similarity = torch.nn.functional.cosine_similarity(state_emb,
                                                                obj_emb,
@@ -352,14 +312,10 @@ class SimpleTagObjectiveSharing(Model):
 
             context_features = torch.cat(
                 [
-                    state_emb.unsqueeze(1).repeat(1, self.n_agents, 1),
-                    obj_emb.unsqueeze(1).repeat(1, self.n_agents, 1),
-                    similarity.view(batch_size, self.n_agents, -1),
+                    state_emb.repeat(1, self.n_agents, 1),
+                    obj_emb.repeat(1, self.n_agents, 1),
+                    similarity,
                 ], dim=2)
-
-            # context_encoded = self.context_feature_encoder.forward(context_features.view(-1, 257)).view(batch_size,
-            #                                                                                             self.n_agents,
-            #                                                                                             -1)
 
             agents_final_features = torch.cat(
                 [
