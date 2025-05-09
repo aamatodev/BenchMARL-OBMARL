@@ -121,8 +121,6 @@ class SimpleTagMlp(Model):
     def _forward(self, tensordict: TensorDictBase) -> TensorDictBase:
 
         obs = tensordict.get(self.agent_group)["observation"]
-        if self.agent_group == "agent":
-            print("Agent group is agents")
         state_obs = get_state_from_obs_v2(obs.view(-1, self.n_agents), self.agent_group)
         with torch.no_grad():
             final_emb, state_emb, obj_emb = self.graph_encoder(state_obs)
