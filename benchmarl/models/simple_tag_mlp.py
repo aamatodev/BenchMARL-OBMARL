@@ -12,7 +12,7 @@ from typing import Optional, Sequence, Type
 
 import torch
 
-from benchmarl.models.simple_tag_objective_sharing import get_state_from_obs
+from benchmarl.models.simple_tag_objective_sharing import get_state_from_obs_v2
 from tensordict import TensorDictBase
 from torch import nn
 from torchrl.modules import MLP, MultiAgentMLP
@@ -123,7 +123,7 @@ class SimpleTagMlp(Model):
         obs = tensordict.get(self.agent_group)["observation"]
         if self.agent_group == "agent":
             print("Agent group is agents")
-        state_obs = get_state_from_obs(obs.view(-1, self.n_agents), self.agent_group)
+        state_obs = get_state_from_obs_v2(obs.view(-1, self.n_agents), self.agent_group)
         with torch.no_grad():
             final_emb, state_emb, obj_emb = self.graph_encoder(state_obs)
 

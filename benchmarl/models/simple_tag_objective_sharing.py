@@ -133,6 +133,82 @@ def generate_objective_node_features(agents_pos):
     return objective_pos, objective_vel, relative_other_pos, relative_prey_pos
 
 
+import torch
+
+# constant “other‑agent” gather indices (shape = 4 agents × 6 coords)
+_GATHER_IDX = torch.tensor(
+    [[2, 3, 4, 5, 6, 7],  # agent‑0 wants coords of agents‑1 & 2 & 3
+     [0, 1, 4, 5, 6, 7],  # agent‑1 …
+     [0, 1, 2, 3, 6, 7],  # agent‑2 …
+     [0, 1, 2, 3, 4, 5]],  # agent‑3 …
+    dtype=torch.long
+)
+
+
+def get_state_from_obs_v2(obs: dict, agent_group: str):
+    """
+    Convert a batch of PettingZoo‑style observations into a full environment state
+    for *all four* agents (3 predators + 1 prey).
+
+    Args
+    ----
+    obs         : dict with keys "agent_pos", "other_pos", "entity_pos", …
+                  Shapes follow the user’s original code.
+    agent_group : "adversary" | "agent"  (prey == "agent")
+
+    Returns
+    -------
+    A dict with exactly the same keys as before, but built via pure
+    tensor operations (no Python loops).
+    """
+    # ── unpack the leading‑agent slice ───────────────────────────────────
+    single = obs[:, 0]  # (B, …)
+    p0_pos = single["agent_pos"]  # (B, 2)
+    # these arrive flattened: (B, 6) and (B, 4)
+    other_r = single["other_pos"].reshape(-1, 3, 2)  # -> (B, 3, 2)
+    entity_r = single["entity_pos"].reshape(-1, 2, 2)  # -> (B, 2, 2)
+
+    B, _ = p0_pos.shape
+    device = p0_pos.device
+
+    # ── absolute positions for *all* 4 agents ───────────────────────────
+    agents_abs = torch.cat([p0_pos.unsqueeze(1),  # (B, 1, 2)
+                            other_r + p0_pos.unsqueeze(1)],  # (B, 3, 2)
+                           dim=1)  # (B, 4, 2)
+
+    # ── absolute positions for the 2 entities ───────────────────────────
+    entity_abs = entity_r + p0_pos.unsqueeze(1)  # (B, 2, 2)
+
+    # ── “other‑agent” positions relative to each agent ──────────────────
+    flat = agents_abs.view(B, 8).unsqueeze(1).expand(-1, 4, 8)
+    rel_all = flat - agents_abs.repeat(1, 1, 4)  # (B, 4, 8)
+    gather_idx = _GATHER_IDX.to(device).expand(B, -1, -1)
+    other_rel = torch.gather(rel_all, 2, gather_idx)  # (B, 4, 6)
+
+    # ── entity positions relative to each agent ─────────────────────────
+    entity_rel = entity_abs.view(B, 4).unsqueeze(1) - agents_abs.repeat(1, 1, 2)  # (B, 4, 4)
+
+    zeros_vel = agents_abs.new_zeros(B, 4, 2)  # stationary
+
+    state = {
+        "agent_pos": agents_abs,
+        "agent_vel": zeros_vel.clone(),
+        "other_pos": other_rel,
+        "other_vel": zeros_vel,
+        "entity_pos": entity_rel,
+    }
+
+    # ── if we’re the prey, rotate so prey is last & fix “other_pos” order ─
+    if agent_group == "agent":
+        for k in ("agent_pos", "agent_vel", "other_pos", "other_vel", "entity_pos"):
+            state[k] = torch.roll(state[k], shifts=-1, dims=1)
+
+        # within each (6‑long) other_pos vector, rotate pairs to match new ordering
+        state["other_pos"][:, :3] = torch.roll(state["other_pos"][:, :3], shifts=-2, dims=2)
+
+    return state
+
+
 def get_state_from_obs(obs, agent_group):
     # from a single observation get the full env state
     single_obs = obs[:, 0]
@@ -283,7 +359,6 @@ class SimpleTagObjectiveSharing(Model):
         self.graph_encoder.eval()
 
     def _perform_checks(self):
-
         super()._perform_checks()
 
     def _forward(self, tensordict: TensorDictBase) -> TensorDictBase:
@@ -292,7 +367,7 @@ class SimpleTagObjectiveSharing(Model):
             # merge groups obs
             obs = tensordict.get(self.agent_group)["observation"]
             batch_size = obs.shape[0]
-            state_obs = get_state_from_obs(obs, self.agent_group)
+            state_obs = get_state_from_obs_v2(obs, self.agent_group)
 
             with torch.no_grad():
                 final_emb, state_emb, obj_emb = self.graph_encoder(state_obs)
