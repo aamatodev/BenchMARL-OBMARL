@@ -1,0 +1,5 @@
+name: loadbalancingobjectivesharing
+
+activation_class: torch.nn.ReLU
+num_cells: [256, 256]
+layer_class: torch.nn.Linear
