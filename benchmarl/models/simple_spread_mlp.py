@@ -12,7 +12,7 @@ from typing import Optional, Sequence, Type
 
 import torch
 
-from cmodels.scl_model import SCLModel
+from Tasks.SimpleSpread.contrastive_model.model.graph_contrastive_model import SimpleSpreadGraphContrastiveModel
 from tensordict import TensorDictBase
 from torch import nn
 from torchrl.modules import MLP, MultiAgentMLP
@@ -98,7 +98,7 @@ class SimpleSpreadMlp(Model):
 
         if self.input_has_agent_dim:
             self.mlp = MultiAgentMLP(
-                n_agent_inputs=47,
+                n_agent_inputs=79 ,
                 n_agent_outputs=self.output_features,
                 n_agents=self.n_agents,
                 centralised=self.centralised,
@@ -119,10 +119,17 @@ class SimpleSpreadMlp(Model):
                 ]
             )
 
-        BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
-        model_path = BASE_DIR / "contrastive_learning/cosine_model.pth"
-
-        self.contrastive_model = torch.load(model_path).to(device=self.device)
+        # 4) Pre‑trained contrastive model providing a *global* context vector
+        base_dir = Path(__file__).resolve().parents[3]
+        model_path = (
+                base_dir
+                / "Tasks"
+                / "SimpleSpread"
+                / "contrastive_model"
+                / "model_epoch_28.pth"
+        )
+        self.contrastive_model = SimpleSpreadGraphContrastiveModel(self.n_agents, self.device)
+        self.contrastive_model.load_state_dict(torch.load(model_path))
         self.contrastive_model.eval()
 
     def _perform_checks(self):
@@ -161,22 +168,19 @@ class SimpleSpreadMlp(Model):
 
     def _forward(self, tensordict: TensorDictBase) -> TensorDictBase:
 
-        agents_pos, agents_vel, landmark_pos, relative_landmarks_pos, relative_other_pos = extract_features_from_obs(
-            tensordict.get("agents")["observation"])
-        batch_size = agents_pos.shape[:-2][0]
-
+        # ---------------- 1. Global contrastive context ---------- #
         with torch.no_grad():
-            final_emb, h_state_emb, h_object_emb = self.contrastive_model(tensordict.get("agents")["observation"])
+            final_emb, final_emb_2, *_ = self.contrastive_model(tensordict.get("agents")["observation"].view(-1, self.n_agents))
 
-        similarity = torch.nn.functional.cosine_similarity(h_state_emb,
-                                                           h_object_emb,
+        similarity = torch.nn.functional.cosine_similarity(final_emb,
+                                                           final_emb_2,
                                                            dim=-1).unsqueeze(1).repeat(1, self.n_agents, 1)
 
         input = torch.cat([tensordict.get(in_key) for in_key in self.reduced_keys], dim=-1)
 
         context = torch.cat([
-            h_state_emb.repeat(1, self.n_agents, 1),
-            h_object_emb.repeat(1, self.n_agents, 1),
+            final_emb.repeat(1, self.n_agents, 1),
+            final_emb_2.repeat(1, self.n_agents, 1),
             similarity], dim=-1)
 
         shape = []

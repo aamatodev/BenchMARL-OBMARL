@@ -90,7 +90,7 @@ class MultiAlgorithmEvaluation:
         # 1) build environment
         self.env = self.task.get_env_fun(
             num_envs=self.config.evaluation_episodes,
-            continuous_actions=False,  # or True, or handle each group separately
+            continuous_actions=True,  # or True, or handle each group separately
             seed=self.seed,
             device=self.config.sampling_device
         )()

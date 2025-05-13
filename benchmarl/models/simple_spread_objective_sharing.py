@@ -4,126 +4,108 @@ from dataclasses import dataclass, MISSING
 from pathlib import Path
 from typing import Type, Sequence, Optional
 
-import numpy as np
 import torch
-import torch_geometric
+from torch import nn
+import torch.nn.functional as F
 from torch_geometric.nn import GATv2Conv
+from tensordict import TensorDictBase
+from torchrl.modules import MultiAgentMLP
 
-from cmodels.scl_model import SCLModel
-from cmodels.scl_model_v5 import SCLModelV5
-from torchrl.data import Composite, Unbounded
-
-from benchmarl.models import Gnn, GnnConfig, DeepsetsConfig, Deepsets
+from Tasks.SimpleSpread.contrastive_model.model.graph_contrastive_model import MLPEncoder, \
+    SimpleSpreadGraphContrastiveModel
+from Tasks.SimpleSpread.utils.utils import generate_graph, layer_init
 from benchmarl.models.common import Model, ModelConfig
 
-from torchrl.data import Composite, Unbounded, ReplayBuffer, LazyTensorStorage
-
-from cmodels.scl_model_v2 import SCLModelv2
-from tensordict import TensorDictBase, TensorDict
-from torch import nn, cosine_similarity
-from torchrl.modules import MLP, MultiAgentMLP
-
-import torch.nn.functional as F
-
-
-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
-    torch.nn.init.orthogonal_(layer.weight, std)
-    torch.nn.init.constant_(layer.bias, bias_const)
-    return layer
-
-
-def generate_graph(batch_size, node_features, node_pos, edge_attr, n_agents, device, use_radius=False, bc=1):
-    b = torch.arange(batch_size * bc, device=device)
-    graphs = torch_geometric.data.Batch()
-    graphs.ptr = torch.arange(0, (batch_size * bc + 1) * n_agents, n_agents)
-    graphs.batch = torch.repeat_interleave(b, n_agents)
-
-    graphs.x = node_features
-    graphs.pos = node_pos
-    graphs.edge_attr = edge_attr
-
-    if use_radius:
-        graphs.edge_index = torch_geometric.nn.pool.radius_graph(
-            graphs.pos, batch=graphs.batch, r=0.5, loop=False
-        )
-    else:
-        adjacency = torch.ones(n_agents, n_agents, device=device, dtype=torch.long)
-        edge_index, _ = torch_geometric.utils.dense_to_sparse(adjacency)
-        # remove self loops
-        graphs.edge_index, _ = torch_geometric.utils.remove_self_loops(edge_index)
-        n_edges = edge_index.shape[1]
-        # Tensor of shape [batch_size * n_edges]
-        # in which edges corresponding to the same graph have the same index.
-        batch = torch.repeat_interleave(b, n_edges)
-        # Edge index for the batched graphs of shape [2, n_edges * batch_size]
-        # we sum to each batch an offset of batch_num * n_agents to make sure that
-        # the adjacency matrices remain independent
-        batch_edge_index = edge_index.repeat(1, batch_size * bc) + batch * n_agents
-        graphs.edge_index = batch_edge_index
-
-    graphs = torch_geometric.transforms.Cartesian(norm=False)(graphs)
-    graphs = torch_geometric.transforms.Distance(norm=False)(graphs)
-
-    return graphs
-
+# --------------------------------------------------------------------------- #
+#                               Helper Modules                                #
+# --------------------------------------------------------------------------- #
 
 class Encoder(nn.Module):
-    """Encoder for initial state of DGN"""
+    """One‑layer MLP used to embed raw node features."""
 
-    def __init__(self, num_input_feature, num_output_feature, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.l1 = layer_init(nn.Linear(num_input_feature, num_output_feature))
+    def __init__(self, in_features: int, out_features: int):
+        super().__init__()
+        self.linear = layer_init(nn.Linear(in_features, out_features))
 
-    def forward(self, obs):
-        embedding = F.relu(self.l1(obs))
-        return embedding
-
-
-def extract_features_from_obs(obs):
-    agents_pos = obs["agent_pos"]
-    agents_vel = obs["agent_vel"]
-    landmarks_pos = obs["landmark_pos"]
-    relative_landmarks_pos = obs["relative_landmark_pos"]
-    relative_other_pos = obs["other_pos"]
-
-    return agents_pos, agents_vel, landmarks_pos, relative_landmarks_pos, relative_other_pos
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # (B, F)
+        return F.relu(self.linear(x))
 
 
-def generate_objective_node_features(landmark_pos, n_agents=3):
-    # in simple spread, the objective is reached once all the landmarks are covered. This happens when the agents
-    # positions are equals to the landmarks positions
-    n_landmark = landmark_pos.shape[1]
-    objective_pos = landmark_pos[:, 1, :].view(-1, n_landmark, 2).clone().detach()
+def split_spread_observation(obs: TensorDictBase):
+    """Extract tensors of interest from a SimpleSpread observation dict.
+
+    Returns:
+        Tuple containing:
+            agents_pos (B, N, 2)
+            agents_vel (B, N, 2)
+            landmarks_pos (B, N, 2)
+            rel_landmarks_pos (B, N, 2)
+            rel_other_pos (B, N, 2)
+    """
+    return (
+        obs["agent_pos"],
+        obs["agent_vel"],
+        obs["landmark_pos"],
+        obs["relative_landmark_pos"],
+        obs["other_pos"],
+    )
+
+
+def create_objective_features(
+    landmark_pos: torch.Tensor,
+    n_agents: int,
+):
+    """Generate 'ideal' (objective) features where each agent sits on a landmark.
+
+    Args:
+        landmark_pos: (B, N, 2) absolute landmark positions.
+        n_agents:     Number of agents (== number of landmarks in SimpleSpread).
+
+    Returns:
+        Tuple of tensors describing the objective state:
+            objective_pos               (B, N, 2)
+            objective_vel               (B, N, 2) – always zero
+            rel_landmarks_pos_objective (B, N, 2)
+            rel_other_pos_objective     (B, N, N‑1, 2)
+    """
+    bsz, n_landmarks, _ = landmark_pos.shape
+    objective_pos = landmark_pos[:, 1, :].view(-1, n_landmarks, 2).clone()
     objective_vel = torch.zeros_like(objective_pos)
 
-    relative_landmarks_pos = landmark_pos - objective_pos.repeat(1, 1, n_landmark)
+    # Position of every landmark relative to every other landmark
+    rel_landmarks_pos = landmark_pos - objective_pos.repeat(1, 1, n_landmarks)
 
-    # Dynamically generate indices for n agents
+    # For each agent i remove its self‑distance to produce "other landmark" features
     indices = []
     for i in range(n_agents):
-        s = i * 2
-        exclude = [s, s + 1]
-        indices.append([j for j in range(2 * n_agents) if j not in exclude])
+        start = i * 2
+        indices.append(
+            [j for j in range(2 * n_agents) if j not in (start, start + 1)]
+        )
 
-    indices = torch.tensor(indices, device=landmark_pos.device)
-    indices = indices.unsqueeze(0).expand(landmark_pos.shape[0], -1, -1)
-    # Use `gather` to apply the indexing along the last dimension
-    relative_other_pos = torch.gather(relative_landmarks_pos, 2, indices)
+    idx = torch.tensor(indices, device=landmark_pos.device)  # (N, 2N‑2)
+    idx = idx.unsqueeze(0).expand(bsz, -1, -1)               # (B, N, 2N‑2)
+    rel_other_pos = torch.gather(rel_landmarks_pos, 2, idx)
 
-    return objective_pos, objective_vel, relative_landmarks_pos, relative_other_pos
+    return objective_pos, objective_vel, rel_landmarks_pos, rel_other_pos
 
+
+# --------------------------------------------------------------------------- #
+#                            Main Agent‑Level Model                           #
+# --------------------------------------------------------------------------- #
 
 class SimpleSpreadObjectiveSharing(Model):
+    """Actor network that augments each agent’s input with a learned
+    representation of the *objective* (all agents sitting on landmarks)."""
+
     def __init__(
-            self,
-            activation_class: Type[nn.Module],
-            threshold: float,
-            stability: float,
-            num_cells: Sequence[int] = MISSING,
-            layer_class: Type[nn.Module] = MISSING,
-            **kwargs,
+        self,
+        activation_class: Type[nn.Module],
+        num_cells: Sequence[int] = MISSING,
+        layer_class: Type[nn.Module] = MISSING,
+        **kwargs,
     ):
-        # Remember the kwargs to the super() class
+        # Initialise BenchMARL base Model
         super().__init__(
             input_spec=kwargs.pop("input_spec"),
             output_spec=kwargs.pop("output_spec"),
@@ -138,20 +120,21 @@ class SimpleSpreadObjectiveSharing(Model):
             is_critic=kwargs.pop("is_critic"),
         )
 
-        self.output_features = self.output_leaf_spec.shape[-1]
-        self.input_features = sum(
-            [spec.shape[-1] for spec in self.input_spec.values(True, True)]
-        ) - self.n_agents * 2  # we remove the "landmark_pos" from the input features
         self.activation_class = activation_class
-        self.threshold = threshold
-        self.stability = stability
+        self.output_features = self.output_leaf_spec.shape[-1]
+        # Remove landmark positions (2 dims per agent) from the raw observation feature count
+        self.input_features = (
+            sum(spec.shape[-1] for spec in self.input_spec.values(True, True))
+            - self.n_agents * 2
+        )
 
-        # self.context_feature_encoder = Encoder(257, 32).to(self.device)
+        # ----------------------------- Sub‑modules -------------------------- #
+        # 1) Graph‑level communication between agents
+        self.gnn = GATv2Conv(16, 16, heads=1, edge_dim=3).to(self.device)
 
-        self.agents_agents_gnn = GATv2Conv(128, 128, 2, edge_dim=3).to(self.device)
-
+        # 2) Final per‑agent policy head
         self.final_mlp = MultiAgentMLP(
-            n_agent_inputs=47,
+            n_agent_inputs=81,
             n_agent_outputs=self.output_features,
             n_agents=self.n_agents,
             centralised=self.centralised,
@@ -162,71 +145,117 @@ class SimpleSpreadObjectiveSharing(Model):
             num_cells=num_cells,
         )
 
-        # self.graph_encoder = SCLModelV5(self.device).to(device=self.device)
-        BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
-        model_path = BASE_DIR / "contrastive_learning/cosine_model.pth"
+        # 3) Node encoder shared by agents & landmarks – (x, y, type) → 16‑D
+        self.node_encoder = MLPEncoder(input_size=3, output_size=16).to(self.device)
 
-        self.contrastive_model = torch.load("/home/aamato/Documents/marl/objective-based-marl/contrastive_learning/cosine_model.pth").to(device=self.device)
+        # 4) Pre‑trained contrastive model providing a *global* context vector
+        base_dir = Path(__file__).resolve().parents[3]
+        model_path = (
+            base_dir
+            / "Tasks"
+            / "SimpleSpread"
+            / "contrastive_model"
+            / "model_epoch_28.pth"
+        )
+        self.contrastive_model = SimpleSpreadGraphContrastiveModel(self.n_agents, self.device)
+        self.contrastive_model.load_state_dict(torch.load(model_path))
         self.contrastive_model.eval()
 
-    def _perform_checks(self):
-        super()._perform_checks()
+    # ----------------------------- Forward Pass ------------------------------ #
 
     def _forward(self, tensordict: TensorDictBase) -> TensorDictBase:
-        # Input has multi-agent input dimension
-        if self.input_has_agent_dim:
-            agents_pos, agents_vel, landmark_pos, relative_landmarks_pos, relative_other_pos = extract_features_from_obs(
-                tensordict.get("agents")["observation"])
-            batch_size = agents_pos.shape[:-2][0]
+        if not self.input_has_agent_dim:
+            raise ValueError("Model expects per‑agent dimension in the input.")
 
-            with torch.no_grad():
-                final_emb, h_state_emb, h_object_emb = self.contrastive_model(tensordict.get("agents")["observation"])
+        # ---------------- 1. Parse observation ---------------- #
+        obs = tensordict.get("agents")["observation"]
+        (
+            agents_pos,
+            _agents_vel,   # Velocities unused for now
+            landmark_pos,
+            _rel_landmarks_pos,
+            _rel_other_pos,
+        ) = split_spread_observation(obs)
 
-            similarity = torch.nn.functional.cosine_similarity(h_state_emb,
-                                                               h_object_emb,
-                                                               dim=-1).unsqueeze(1).repeat(1, self.n_agents, 1)
+        batch_size = agents_pos.size(0)
 
-            # agents feature encoding
-            agents_features = torch.cat([
-                agents_pos,
-                agents_vel,
-                relative_landmarks_pos,
-                relative_other_pos], dim=2).view(batch_size, self.n_agents, -1)
+        # ---------------- 2. Build *objective* state ------------ #
+        (
+            obj_pos,
+            _obj_vel,
+            _obj_rel_landmarks_pos,
+            _obj_rel_other_pos,
+        ) = create_objective_features(landmark_pos, self.n_agents)
 
-            context_features = torch.cat([
-                h_state_emb.repeat(1, self.n_agents, 1),
-                h_object_emb.repeat(1, self.n_agents, 1),
-                similarity], dim=2).view(batch_size, self.n_agents, -1)
+        # ---------------- 3. Encode graph nodes ----------------- #
+        # type feature helps GNN distinguish agent vs. landmark
+        agent_type = torch.zeros((batch_size, self.n_agents, 1), device=self.device)
+        lm_type = torch.ones_like(agent_type)
 
-            agents_final_features = torch.cat(
-                [
-                    agents_features,
-                    context_features,
-                ], dim=2)
+        cur_nodes = torch.cat([agents_pos, obj_pos], dim=1)        # (B, 2N, 2)
+        cur_types = torch.cat([agent_type, lm_type], dim=1)
+        cur_feats = torch.cat([cur_nodes, cur_types], dim=-1).view(-1, 3)  # (B*2N, 3)
 
-            res = self.final_mlp(agents_final_features.view(batch_size, self.n_agents, -1))
+        node_embeddings = self.node_encoder(cur_feats)             # (B*2N, 16)
 
-        tensordict.set(self.out_keys[0], res)
+        # ---------------- 4. Global contrastive context ---------- #
+        with torch.no_grad():
+            final_emb, final_emb_2, *_ = self.contrastive_model(obs)
+
+        similarity = F.cosine_similarity(final_emb, final_emb_2, dim=-1).unsqueeze(1).unsqueeze(1)
+        similarity = similarity.repeat(1, self.n_agents, 1)         # (B, N, 1)
+
+        # ---------------- 5. Build batched graph ---------------- #
+        num_total_nodes = self.n_agents * 2
+        graph_repr = generate_graph(
+            batch_size=batch_size,
+            node_features=node_embeddings,
+            node_pos=cur_nodes.view(-1, 2),
+            edge_attr=None,
+            n_agents=num_total_nodes,
+            device=self.device,
+        )
+
+        cur_h = self.gnn(graph_repr.x, graph_repr.edge_index, graph_repr.edge_attr).view(batch_size, num_total_nodes, -1)
+
+        # ---------------- 6. Concatenate all features ------------ #
+        context = torch.cat(
+            [
+                final_emb.unsqueeze(1).repeat(1, self.n_agents, 1),
+                final_emb_2.unsqueeze(1).repeat(1, self.n_agents, 1),
+                similarity,
+            ],
+            dim=2,
+        )                                                           # (B, N, 65)
+
+        agent_inputs = torch.cat([cur_h[:, :self.n_agents, :], context], dim=2)      # (B, N, 81)
+
+        # ---------------- 7. Per‑agent policy head --------------- #
+        actions = self.final_mlp(agent_inputs.view(batch_size, self.n_agents, -1))
+
+        # ---------------- 8. Write outputs into TensorDict ------- #
+        tensordict.set(self.out_keys[0], actions)
         tensordict.set(self.out_keys[1], similarity)
 
         return tensordict
 
 
+# --------------------------------------------------------------------------- #
+#                           Hydra / YAML Config Glue                          #
+# --------------------------------------------------------------------------- #
+
 @dataclass
 class SimpleSpreadObjectiveSharingConfig(ModelConfig):
-    # The config parameters for this class, these will be loaded from yaml
+    """Hydra config schema for :class:`SimpleSpreadObjectiveSharing`."""
+
     activation_class: Type[nn.Module] = MISSING
     num_cells: Sequence[int] = MISSING
     layer_class: Type[nn.Module] = MISSING
 
     activation_kwargs: Optional[dict] = None
-    norm_class: Type[nn.Module] = None
+    norm_class: Optional[Type[nn.Module]] = None
     norm_kwargs: Optional[dict] = None
-
-    threshold: float = 12.0
-    stability: float = 0.2
 
     @staticmethod
     def associated_class():
-        # The associated algorithm class
         return SimpleSpreadObjectiveSharing
