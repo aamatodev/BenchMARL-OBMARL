@@ -1,0 +1,3 @@
+name: simplespreadggnn
+
+activation_class: torch.nn.ReLU

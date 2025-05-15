@@ -20,6 +20,27 @@ from torchrl.modules import MLP, MultiAgentMLP
 from benchmarl.models.common import Model, ModelConfig
 
 
+class Encoder(nn.Module):
+    """One‑layer MLP used to embed raw node features."""
+
+    def __init__(self, in_features: int, out_features: int):
+        super().__init__()
+        self.linear = nn.Linear(in_features, 256)
+        self.linear1 = nn.Linear(256, 256)
+        self.linear2 = nn.Linear(256, 256)
+        self.linear3 = nn.Linear(256, 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # (B, F)
+        l1 = torch.relu(self.linear(x))
+        l2 = torch.relu(self.linear1(l1))
+        l3 = torch.relu(self.linear2(l2))
+        l4 = self.linear3(l3)
+
+        return l4
+
+
+
+
 def extract_features_from_obs(obs):
     agents_pos = obs["agent_pos"]
     agents_vel = obs["agent_vel"]
@@ -96,28 +117,30 @@ class SimpleSpreadMlp(Model):
 
         self.output_features = self.output_leaf_spec.shape[-1]
 
-        if self.input_has_agent_dim:
-            self.mlp = MultiAgentMLP(
-                n_agent_inputs=79 ,
-                n_agent_outputs=self.output_features,
-                n_agents=self.n_agents,
-                centralised=self.centralised,
-                share_params=self.share_params,
-                device=self.device,
-                **kwargs,
-            )
-        else:
-            self.mlp = nn.ModuleList(
-                [
-                    MLP(
-                        in_features=self.input_features,
-                        out_features=self.output_features,
-                        device=self.device,
-                        **kwargs,
-                    )
-                    for _ in range(self.n_agents if not self.share_params else 1)
-                ]
-            )
+        self.mlp = Encoder(79, 256)
+
+        # if self.input_has_agent_dim:
+        #     self.mlp = MultiAgentMLP(
+        #         n_agent_inputs=79,
+        #         n_agent_outputs=self.output_features,
+        #         n_agents=self.n_agents,
+        #         centralised=self.centralised,
+        #         share_params=self.share_params,
+        #         device=self.device,
+        #         **kwargs,
+        #     )
+        # else:
+        #     self.mlp = nn.ModuleList(
+        #         [
+        #             MLP(
+        #                 in_features=self.input_features,
+        #                 out_features=self.output_features,
+        #                 device=self.device,
+        #                 **kwargs,
+        #             )
+        #             for _ in range(self.n_agents if not self.share_params else 1)
+        #         ]
+        #     )
 
         # 4) Pre‑trained contrastive model providing a *global* context vector
         base_dir = Path(__file__).resolve().parents[3]
@@ -126,7 +149,7 @@ class SimpleSpreadMlp(Model):
                 / "Tasks"
                 / "SimpleSpread"
                 / "contrastive_model"
-                / "model_epoch_28.pth"
+                / "cosine_graph_model.pth"
         )
         self.contrastive_model = SimpleSpreadGraphContrastiveModel(self.n_agents, self.device)
         self.contrastive_model.load_state_dict(torch.load(model_path))
@@ -170,7 +193,8 @@ class SimpleSpreadMlp(Model):
 
         # ---------------- 1. Global contrastive context ---------- #
         with torch.no_grad():
-            final_emb, final_emb_2, *_ = self.contrastive_model(tensordict.get("agents")["observation"].view(-1, self.n_agents))
+            final_emb, final_emb_2, *_ = self.contrastive_model(
+                tensordict.get("agents")["observation"].view(-1, self.n_agents))
 
         similarity = torch.nn.functional.cosine_similarity(final_emb,
                                                            final_emb_2,

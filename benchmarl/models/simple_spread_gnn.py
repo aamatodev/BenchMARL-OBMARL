@@ -117,15 +117,13 @@ def create_objective_features(
 #                            Main Agent‑Level Model                           #
 # --------------------------------------------------------------------------- #
 
-class SimpleSpreadObjectiveSharing(Model):
+class SimpleSpreadGnn(Model):
     """Actor network that augments each agent’s input with a learned
     representation of the *objective* (all agents sitting on landmarks)."""
 
     def __init__(
             self,
             activation_class: Type[nn.Module],
-            num_cells: Sequence[int] = MISSING,
-            layer_class: Type[nn.Module] = MISSING,
             **kwargs,
     ):
         # Initialise BenchMARL base Model
@@ -145,47 +143,15 @@ class SimpleSpreadObjectiveSharing(Model):
 
         self.activation_class = activation_class
         self.output_features = self.output_leaf_spec.shape[-1]
-        # Remove landmark positions (2 dims per agent) from the raw observation feature count
-        self.input_features = (
-                sum(spec.shape[-1] for spec in self.input_spec.values(True, True))
-                - self.n_agents * 2
-        )
 
         # ----------------------------- Sub‑modules -------------------------- #
-
         # 1) Graph‑level communication between agents
         self.gnn = GATv2Conv(16, 16, heads=3, edge_dim=3).to(self.device)
 
         self.final_mlp = FinalEncoder(81, self.output_features).to(self.device)
-        #
-        # # 2) Final per‑agent policy head
-        # self.final_mlp = MultiAgentMLP(
-        #     n_agent_inputs=81,
-        #     n_agent_outputs=self.output_features,
-        #     n_agents=self.n_agents,
-        #     centralised=self.centralised,
-        #     share_params=self.share_params,
-        #     device=self.device,
-        #     activation_class=activation_class,
-        #     layer_class=layer_class,
-        #     num_cells=num_cells,
-        # )
 
-        # 3) Node encoder shared by agents & landmarks – (x, y, type) → 16‑D
+        # 2) Node encoder shared by agents & landmarks – (x, y, type) → 16‑D
         self.node_encoder = MLPEncoder(input_size=3, output_size=16).to(self.device)
-
-        # 4) Pre‑trained contrastive model providing a *global* context vector
-        base_dir = Path(__file__).resolve().parents[3]
-        model_path = (
-                base_dir
-                / "Tasks"
-                / "SimpleSpread"
-                / "contrastive_model"
-                / "cosine_graph_model.pth"
-        )
-        self.contrastive_model = SimpleSpreadGraphContrastiveModel(self.n_agents, self.device)
-        self.contrastive_model.load_state_dict(torch.load(model_path))
-        self.contrastive_model.eval()
 
     # ----------------------------- Forward Pass ------------------------------ #
 
@@ -213,7 +179,7 @@ class SimpleSpreadObjectiveSharing(Model):
             _obj_rel_other_pos,
         ) = create_objective_features(landmark_pos, agents_pos.shape[1])
 
-        # ---------------- 3. Encode graph nodes ----------------- #
+        # ---------------- 2. Encode graph nodes ----------------- #
         # type feature helps GNN distinguish agent vs. landmark
         agent_type = torch.zeros((batch_size, agents_pos.shape[1], 1), device=self.device)
         obj_type = torch.ones_like(agent_type)
@@ -224,15 +190,7 @@ class SimpleSpreadObjectiveSharing(Model):
 
         node_embeddings = self.node_encoder(cur_feats)  # (B*2N, 16)
 
-        # ---------------- 4. Global contrastive context ---------- #
-        with torch.no_grad():
-            final_emb, final_emb_2, current_state_embedding, objective_state_embedding = self.contrastive_model(obs)
-
-        similarity = F.cosine_similarity(current_state_embedding, objective_state_embedding, dim=-1).unsqueeze(
-            1).unsqueeze(1)
-        similarity = similarity.repeat(1, agents_pos.shape[1], 1)  # (B, N, 1)
-
-        # ---------------- 5. Build batched graph ---------------- #
+        # ---------------- 3. Build batched graph ---------------- #
         num_total_nodes = agents_pos.shape[1] * 2
         graph_repr = generate_graph(
             batch_size=batch_size,
@@ -245,25 +203,13 @@ class SimpleSpreadObjectiveSharing(Model):
 
         cur_h = self.gnn(graph_repr.x, graph_repr.edge_index, graph_repr.edge_attr).view(batch_size, num_total_nodes,
                                                                                          -1)
+        agent_inputs = cur_h[:, :agents_pos.shape[1], :]  # (B, N, 81)
 
-        # ---------------- 6. Concatenate all features ------------ #
-        context = torch.cat(
-            [
-                current_state_embedding.unsqueeze(1).repeat(1, agents_pos.shape[1], 1),
-                objective_state_embedding.unsqueeze(1).repeat(1, agents_pos.shape[1], 1),
-                similarity,
-            ],
-            dim=2,
-        )  # (B, N, 65)
-
-        agent_inputs = torch.cat([cur_h[:, :agents_pos.shape[1], :], context], dim=2)  # (B, N, 81)
-
-        # ---------------- 7. Per‑agent policy head --------------- #
+        # ---------------- 4. Per‑agent policy head --------------- #
         actions = self.final_mlp(agent_inputs.view(batch_size, agents_pos.shape[1], -1))
 
-        # ---------------- 8. Write outputs into TensorDict ------- #
+        # ---------------- 5. Write outputs into TensorDict ------- #
         tensordict.set(self.out_keys[0], actions)
-        tensordict.set(self.out_keys[1], similarity)
 
         return tensordict
 
@@ -273,7 +219,7 @@ class SimpleSpreadObjectiveSharing(Model):
 # --------------------------------------------------------------------------- #
 
 @dataclass
-class SimpleSpreadObjectiveSharingConfig(ModelConfig):
+class SimpleSpreadGnnConfig(ModelConfig):
     """Hydra config schema for :class:`SimpleSpreadObjectiveSharing`."""
 
     activation_class: Type[nn.Module] = MISSING
@@ -286,4 +232,4 @@ class SimpleSpreadObjectiveSharingConfig(ModelConfig):
 
     @staticmethod
     def associated_class():
-        return SimpleSpreadObjectiveSharing
+        return SimpleSpreadGnn
