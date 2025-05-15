@@ -116,28 +116,8 @@ class SimpleSpreadOSCriticGnn(Model):
 
         self.output_features = self.output_leaf_spec.shape[-1]
 
-        if self.input_has_agent_dim:
-            self.mlp = MultiAgentMLP(
-                n_agent_inputs=36,
-                n_agent_outputs=self.output_features,
-                n_agents=self.n_agents,
-                centralised=self.centralised,
-                share_params=self.share_params,
-                device=self.device,
-                **kwargs,
-            )
-        else:
-            self.mlp = nn.ModuleList(
-                [
-                    MLP(
-                        in_features=self.input_features,
-                        out_features=self.output_features,
-                        device=self.device,
-                        **kwargs,
-                    )
-                    for _ in range(self.n_agents if not self.share_params else 1)
-                ]
-            )
+        self.mlp = Encoder(51, self.output_features).to(self.device)
+
 
         # 4) Pre‑trained contrastive model providing a *global* context vector
         base_dir = Path(__file__).resolve().parents[3]
@@ -195,11 +175,11 @@ class SimpleSpreadOSCriticGnn(Model):
 
         similarity = torch.nn.functional.cosine_similarity(final_emb,
                                                            final_emb_2,
-                                                           dim=-1).unsqueeze(1).repeat(1, self.n_agents, 1)
+                                                           dim=-1)
         context = torch.cat([
-            state_emb.repeat(1, self.n_agents*2, 1),
-            obj_emb.repeat(1, self.n_agents*2, 1),
-            similarity.repeat(1, 2, 1)], dim=-1)
+            state_emb,
+            obj_emb,
+            similarity.unsqueeze(1)], dim=-1)
         # ---------------- 1. Parse observation ---------------- #
         obs = tensordict.get("agents")["observation"]
 
@@ -235,11 +215,14 @@ class SimpleSpreadOSCriticGnn(Model):
         cur_nodes = torch.cat([agents_pos.view(shape), obj_pos.view(shape)], dim=-2)  # (B, 2N, 2)
         cur_types = torch.cat([agent_type, obj_type], dim=-2)  # (B, 2N, 1)
         shape[-2] = self.n_agents * 2
-        cur_feats = torch.cat([cur_nodes, cur_types, context.view(shape)], dim=-1)  # (B*2N, 3)
+        cur_feats = torch.cat([cur_nodes, cur_types], dim=-1)  # (B*2N, 3)
+        shape[-2] = 1
+        cur_feats = cur_feats.view(tuple(shape))
+        cur_feats = torch.cat([cur_feats, context.view(tuple(shape))], dim=-1)
 
         # Has multi-agent input dimension
         if self.input_has_agent_dim:
-            res = self.mlp.forward(cur_feats[..., :self.n_agents, :])
+            res = self.mlp.forward(cur_feats)
             if not self.output_has_agent_dim:
                 # If we are here the module is centralised and parameter shared.
                 # Thus the multi-agent dimension has been expanded,
