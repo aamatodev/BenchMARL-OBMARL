@@ -148,7 +148,7 @@ class SimpleSpreadGnn(Model):
         # 1) Graph‑level communication between agents
         self.gnn = GATv2Conv(16, 16, heads=3, edge_dim=3).to(self.device)
 
-        self.final_mlp = FinalEncoder(81, self.output_features).to(self.device)
+        self.final_mlp = FinalEncoder(48, self.output_features).to(self.device)
 
         # 2) Node encoder shared by agents & landmarks – (x, y, type) → 16‑D
         self.node_encoder = MLPEncoder(input_size=3, output_size=16).to(self.device)

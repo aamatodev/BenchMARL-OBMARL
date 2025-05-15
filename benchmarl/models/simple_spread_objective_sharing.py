@@ -92,7 +92,7 @@ def create_objective_features(
             rel_other_pos_objective     (B, N, N‑1, 2)
     """
     bsz, n_landmarks, _ = landmark_pos.shape
-    objective_pos = landmark_pos[:, 1, :].view(-1, n_landmarks, 2).clone()
+    objective_pos = landmark_pos[:, 1, :].reshape(-1, n_landmarks, 2).clone()
     objective_vel = torch.zeros_like(objective_pos)
 
     # Position of every landmark relative to every other landmark
