@@ -12,8 +12,8 @@ from typing import Optional, Sequence, Type
 
 import torch
 
-from Tasks.SimpleSpread.contrastive_model.model.graph_contrastive_model import SimpleSpreadGraphContrastiveModel
-from benchmarl.models.simple_spread_objective_sharing import split_spread_observation, create_objective_features
+from Tasks.LoadBalancing.contrastive_model.model.lb_graph_contrastive_model import LbContrastiveGraphModel
+from benchmarl.models.simple_tag_objective_sharing import get_state_from_obs_v2
 from tensordict import TensorDictBase
 from torch import nn
 from torchrl.modules import MLP, MultiAgentMLP
@@ -37,41 +37,19 @@ class Encoder(nn.Module):
 
         return l3
 
+
 def extract_features_from_obs(obs):
-    agents_pos = obs["agent_pos"]
-    agents_vel = obs["agent_vel"]
-    landmarks_pos = obs["landmark_pos"]
-    relative_landmarks_pos = obs["relative_landmark_pos"]
-    relative_other_pos = obs["other_pos"]
-
-    return agents_pos, agents_vel, landmarks_pos, relative_landmarks_pos, relative_other_pos
+    current_obs = obs  # [batch, 3]
+    target = obs[..., -3:]  # the last 3
+    return current_obs, target
 
 
-def generate_objective_node_features(landmark_pos, n_agents=3):
-    # in simple spread, the objective is reached once all the landmarks are covered. This happens when the agents
-    # positions are equals to the landmarks positions
-    n_landmark = landmark_pos.shape[1]
-    objective_pos = landmark_pos[:, 1, :].view(-1, n_landmark, 2).clone().detach()
-    objective_vel = torch.zeros_like(objective_pos)
-
-    relative_landmarks_pos = landmark_pos - objective_pos.repeat(1, 1, n_landmark)
-
-    # Dynamically generate indices for n agents
-    indices = []
-    for i in range(n_agents):
-        s = i * 2
-        exclude = [s, s + 1]
-        indices.append([j for j in range(2 * n_agents) if j not in exclude])
-
-    indices = torch.tensor(indices, device=landmark_pos.device)
-    indices = indices.unsqueeze(0).expand(landmark_pos.shape[0], -1, -1)
-    # Use `gather` to apply the indexing along the last dimension
-    relative_other_pos = torch.gather(relative_landmarks_pos, 2, indices)
-
-    return objective_pos, objective_vel, relative_landmarks_pos, relative_other_pos
+def generate_objective_node_features(targets):
+    obj_feature = torch.cat([targets, targets], dim=-1)
+    return obj_feature
 
 
-class SimpleSpreadCriticGnn(Model):
+class LoadBalancingCriticMlp(Model):
     """Multi layer perceptron model.
 
     Args:
@@ -103,44 +81,12 @@ class SimpleSpreadCriticGnn(Model):
             model_index=kwargs.pop("model_index"),
             is_critic=kwargs.pop("is_critic"),
         )
-        # self.in_keys.remove(('agents', 'observation', 'landmark_pos'))
-        self.reduced_keys = self.in_keys.copy()
-        self.reduced_keys.remove(('agents', 'observation', 'landmark_pos'))
 
-        self.input_features = sum(
-            [spec.shape[-1] for spec in self.input_spec.values(True, True)]
-        ) - self.n_agents * 2  # we remove the "landmark_pos" from the input features
-
+        self.input_features = 39
         self.output_features = self.output_leaf_spec.shape[-1]
-        self.n_agents = 3
-        # torch.manual_seed(0)
-        self.mlp = Encoder(18, self.output_features).to(self.device)
 
-        if self.input_has_agent_dim:
-            self.mlp = MultiAgentMLP(
-                n_agent_inputs=3,
-                n_agent_outputs=self.output_features,
-                n_agents=self.n_agents*2,
-                centralised=self.centralised,
-                share_params=self.share_params,
-                device=self.device,
-                **kwargs,
-            )
-        else:
-            self.mlp = nn.ModuleList(
-                [
-                    MLP(
-                        in_features=self.input_features,
-                        out_features=self.output_features,
-                        device=self.device,
-                        **kwargs,
-                    )
-                    for _ in range(self.n_agents if not self.share_params else 1)
-                ]
-            )
+        self.mlp = Encoder(12, self.output_features).to(self.device)
 
-
-        print("done")
     def _perform_checks(self):
         super()._perform_checks()
 
@@ -177,48 +123,28 @@ class SimpleSpreadCriticGnn(Model):
 
     def _forward(self, tensordict: TensorDictBase) -> TensorDictBase:
 
-        # ---------------- 1. Parse observation ---------------- #
-        obs = tensordict.get("agents")["observation"]
+        # ---------------- 2 Parse observation ---------------- #
+        obs = tensordict["agent"]["observation"]
+        current_status, target_status = extract_features_from_obs(obs)
+        batch_size = current_status.shape[0]
 
-        (
-            agents_pos,
-            _agents_vel,  # Velocities unused for now
-            landmark_pos,
-            _rel_landmarks_pos,
-            _rel_other_pos,
-        ) = split_spread_observation(obs)
+        current_status = current_status[..., 0, :]
+        cur_nodes_f = current_status.reshape(-1, self.n_agents * 2, 1)
 
-        batch_size = agents_pos.size(0)
+        agent_type = torch.zeros((cur_nodes_f.shape[0], self.n_agents, 1), device=self.device)
+        lm_type = torch.ones_like(agent_type)
 
-        # ---------------- 2. Build *objective* state ------------ #
-        (
-            obj_pos,
-            _obj_vel,
-            _obj_rel_landmarks_pos,
-            _obj_rel_other_pos,
-        ) = create_objective_features(landmark_pos.view(-1, obs.shape[-1], 6), obs.shape[-1])
-
-        # ---------------- 2. Encode graph nodes ----------------- #
-        # type feature helps GNN distinguish agent vs. landmark
+        cur_types = torch.cat([agent_type, lm_type], dim=1)
+        cur_feats = torch.cat([cur_nodes_f, cur_types], dim=-1)
 
         shape = []
         for i in obs.shape:
             shape.append(i)
-        shape.append(1)
-        agent_type = torch.zeros(tuple(shape), device=self.device)
-        obj_type = torch.ones_like(agent_type)
 
         shape[-1] = -1
-        cur_nodes = torch.cat([agents_pos.view(shape), obj_pos.view(shape)], dim=-2)  # (B, 2N, 2)
-        cur_types = torch.cat([agent_type, obj_type], dim=-2)  # (B, 2N, 1)
-        cur_feats = torch.cat([cur_nodes, cur_types], dim=-1)  # (B*2N, 3)
-
-        #
-        # if ('agents', 'action') in self.in_keys:
-        #     action = tensordict.get("agents")["action"]
-        #     lm_action = torch.zeros(tensordict.get("agents")["action"].shape, device=self.device)
-        #     action = torch.cat([action, lm_action], dim=-2)
-        #     cur_feats = torch.cat([cur_feats, action], dim=-1)
+        shape[-2] = 1
+        cur_feats = cur_feats.view(tuple(shape))
+        cur_feats = cur_feats
 
         # Has multi-agent input dimension
         if self.input_has_agent_dim:
@@ -244,7 +170,7 @@ class SimpleSpreadCriticGnn(Model):
 
 
 @dataclass
-class SimpleSpreadCriticGnnConfig(ModelConfig):
+class LoadBalancingCriticMlpConfig(ModelConfig):
     """Dataclass config for a :class:`~benchmarl.models.Mlp`."""
 
     num_cells: Sequence[int] = MISSING
@@ -258,4 +184,4 @@ class SimpleSpreadCriticGnnConfig(ModelConfig):
 
     @staticmethod
     def associated_class():
-        return SimpleSpreadCriticGnn
+        return LoadBalancingCriticMlp

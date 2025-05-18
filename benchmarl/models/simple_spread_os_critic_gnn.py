@@ -28,16 +28,14 @@ class Encoder(nn.Module):
         super().__init__()
         self.linear = nn.Linear(in_features, 256)
         self.linear1 = nn.Linear(256, 256)
-        self.linear2 = nn.Linear(256, 256)
-        self.linear3 = nn.Linear(256, out_features)
+        self.linear2 = nn.Linear(256, out_features)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # (B, F)
         l1 = torch.relu(self.linear(x))
         l2 = torch.relu(self.linear1(l1))
-        l3 = torch.relu(self.linear2(l2))
-        l4 = self.linear3(l3)
+        l3 = self.linear2(l2)
 
-        return l4
+        return l3
 
 
 def extract_features_from_obs(obs):
@@ -115,8 +113,18 @@ class SimpleSpreadOSCriticGnn(Model):
         ) - self.n_agents * 2  # we remove the "landmark_pos" from the input features
 
         self.output_features = self.output_leaf_spec.shape[-1]
-
+        # torch.manual_seed(0)
         self.mlp = Encoder(51, self.output_features).to(self.device)
+
+        self.mlp = MultiAgentMLP(
+            n_agent_inputs=3,
+            n_agent_outputs=self.output_features,
+            n_agents=self.n_agents * 2,
+            centralised=self.centralised,
+            share_params=self.share_params,
+            device=self.device,
+            **kwargs,
+        )
 
 
         # 4) Pre‑trained contrastive model providing a *global* context vector

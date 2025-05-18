@@ -56,7 +56,7 @@ def generate_objective_node_features(targets):
     return obj_feature
 
 
-class LoadBalancingObjectiveSharing(Model):
+class LoadBalancingGnn(Model):
     def __init__(
             self,
             activation_class: Type[nn.Module],
@@ -89,24 +89,9 @@ class LoadBalancingObjectiveSharing(Model):
 
         # 1) Graph‑level communication between agents
         self.gnn = GATv2Conv(16, 16, heads=3, edge_dim=1).to(self.device)
-
-        self.final_mlp = FinalEncoder(49, self.output_features).to(self.device)
-
+        self.final_mlp = FinalEncoder(48, self.output_features).to(self.device)
         # 3) Node encoder shared by agents & landmarks – (x, y, type) → 16‑D
         self.node_encoder = MLPEncoder(input_size=2, output_size=16).to(self.device)
-
-        # 4) Pre‑trained contrastive model providing a *global* context vector
-        base_dir = Path(__file__).resolve().parents[3]
-        model_path = (
-                base_dir
-                / "Tasks"
-                / "LoadBalancing"
-                / "contrastive_model"
-                / "cosine_graph_model.pth"
-        )
-        self.contrastive_model = LbContrastiveGraphModel(self.n_agents, self.device)
-        self.contrastive_model.load_state_dict(torch.load(model_path))
-        self.contrastive_model.eval()
 
     def _perform_checks(self):
         super()._perform_checks()
@@ -147,26 +132,7 @@ class LoadBalancingObjectiveSharing(Model):
         # Shared GAT‑v2 over both graphs
         cur_h = self.gnn(cur_graph.x, cur_graph.edge_index, cur_graph.edge_attr)
 
-        # ---------------- 4. Global contrastive context ---------- #
-        with torch.no_grad():
-            final_emb, current_state_embedding, objective_state_embedding = self.contrastive_model(obs)
-
-        similarity = F.cosine_similarity(current_state_embedding, objective_state_embedding, dim=-1).unsqueeze(
-            1).unsqueeze(1)
-        similarity = similarity.repeat(1, self.n_agents, 1)  # (B, N, 1)
-
-        # ---------------- 6. Concatenate all features ------------ #
-        context = torch.cat(
-            [
-                # current_state_embedding.unsqueeze(1).repeat(1, agents_pos.shape[1], 1),
-                # objective_state_embedding.unsqueeze(1).repeat(1, agents_pos.shape[1], 1),
-                similarity,
-            ],
-            dim=2,
-        )  # (B, N, 65)
-
-        agent_inputs = torch.cat([cur_h.view((obs.shape[0], self.n_agents*2, -1))[:, :self.n_agents, :],
-                                  context], dim=2)  # (B, N, 81)
+        agent_inputs = cur_h.view((obs.shape[0], self.n_agents * 2, -1))[:, :self.n_agents, :]  # (B, N, 81)
 
         # ---------------- 7. Per‑agent policy head --------------- #
         actions = self.final_mlp(agent_inputs.view(batch_size, self.n_agents, -1))
@@ -175,16 +141,14 @@ class LoadBalancingObjectiveSharing(Model):
         if len(tensordict["agent"]["observation"].shape) == 2:
             # If the observation is 2D, we need to remove the dimension
             actions = actions.squeeze(0)
-            similarity = similarity.squeeze(0)
 
         tensordict.set(self.out_keys[0], actions)
-        tensordict.set(self.out_keys[1], similarity)
 
         return tensordict
 
 
 @dataclass
-class LoadBalancingObjectiveSharingConfig(ModelConfig):
+class LoadBalancingGnnConfig(ModelConfig):
     # The config parameters for this class, these will be loaded from yaml
     activation_class: Type[nn.Module] = MISSING
     num_cells: Sequence[int] = MISSING
@@ -193,4 +157,4 @@ class LoadBalancingObjectiveSharingConfig(ModelConfig):
     @staticmethod
     def associated_class():
         # The associated algorithm class
-        return LoadBalancingObjectiveSharing
+        return LoadBalancingGnn

@@ -124,8 +124,6 @@ class SimpleSpreadObjectiveSharing(Model):
     def __init__(
             self,
             activation_class: Type[nn.Module],
-            num_cells: Sequence[int] = MISSING,
-            layer_class: Type[nn.Module] = MISSING,
             **kwargs,
     ):
         # Initialise BenchMARL base Model
@@ -156,20 +154,7 @@ class SimpleSpreadObjectiveSharing(Model):
         # 1) Graph‑level communication between agents
         self.gnn = GATv2Conv(16, 16, heads=3, edge_dim=3).to(self.device)
 
-        self.final_mlp = FinalEncoder(81, self.output_features).to(self.device)
-        #
-        # # 2) Final per‑agent policy head
-        # self.final_mlp = MultiAgentMLP(
-        #     n_agent_inputs=81,
-        #     n_agent_outputs=self.output_features,
-        #     n_agents=self.n_agents,
-        #     centralised=self.centralised,
-        #     share_params=self.share_params,
-        #     device=self.device,
-        #     activation_class=activation_class,
-        #     layer_class=layer_class,
-        #     num_cells=num_cells,
-        # )
+        self.final_mlp = FinalEncoder(49, self.output_features).to(self.device)
 
         # 3) Node encoder shared by agents & landmarks – (x, y, type) → 16‑D
         self.node_encoder = MLPEncoder(input_size=3, output_size=16).to(self.device)
@@ -249,8 +234,8 @@ class SimpleSpreadObjectiveSharing(Model):
         # ---------------- 6. Concatenate all features ------------ #
         context = torch.cat(
             [
-                current_state_embedding.unsqueeze(1).repeat(1, agents_pos.shape[1], 1),
-                objective_state_embedding.unsqueeze(1).repeat(1, agents_pos.shape[1], 1),
+                # current_state_embedding.unsqueeze(1).repeat(1, agents_pos.shape[1], 1),
+                # objective_state_embedding.unsqueeze(1).repeat(1, agents_pos.shape[1], 1),
                 similarity,
             ],
             dim=2,

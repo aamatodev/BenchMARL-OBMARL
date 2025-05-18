@@ -12,6 +12,7 @@ from typing import Optional, Sequence, Type
 
 import torch
 
+from Tasks.LoadBalancing.contrastive_model.model.lb_graph_contrastive_model import LbContrastiveGraphModel
 from benchmarl.models.simple_tag_objective_sharing import get_state_from_obs_v2
 from tensordict import TensorDictBase
 from torch import nn
@@ -19,6 +20,22 @@ from torchrl.modules import MLP, MultiAgentMLP
 
 from benchmarl.models.common import Model, ModelConfig
 
+
+class Encoder(nn.Module):
+    """One‑layer MLP used to embed raw node features."""
+
+    def __init__(self, in_features: int, out_features: int):
+        super().__init__()
+        self.linear = nn.Linear(in_features, 256)
+        self.linear1 = nn.Linear(256, 256)
+        self.linear3 = nn.Linear(256, out_features)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # (B, F)
+        l1 = torch.relu(self.linear(x))
+        l2 = torch.relu(self.linear1(l1))
+        l3 = self.linear3(l2)
+
+        return l3
 
 
 def extract_features_from_obs(obs):
@@ -68,34 +85,20 @@ class LoadBalancingMlp(Model):
         self.input_features = 39
         self.output_features = self.output_leaf_spec.shape[-1]
 
-        if self.input_has_agent_dim:
-            self.mlp = MultiAgentMLP(
-                n_agent_inputs=self.input_features,
-                n_agent_outputs=self.output_features,
-                n_agents=self.n_agents,
-                centralised=self.centralised,
-                share_params=self.share_params,
-                device=self.device,
-                **kwargs,
-            )
-        else:
-            self.mlp = nn.ModuleList(
-                [
-                    MLP(
-                        in_features=self.input_features,
-                        out_features=self.output_features,
-                        device=self.device,
-                        **kwargs,
-                    )
-                    for _ in range(self.n_agents if not self.share_params else 1)
-                ]
-            )
+        self.mlp = Encoder(77, self.output_features).to(self.device)
 
-        BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
-        model_path = BASE_DIR / "Tasks/LoadBalancing/contrastive_model/lb_model_full_32.pth"
-        self.graph_encoder = torch.load(model_path).to(
-            device=self.device)
-        self.graph_encoder.eval()
+        # 4) Pre‑trained contrastive model providing a *global* context vector
+        base_dir = Path(__file__).resolve().parents[3]
+        model_path = (
+                base_dir
+                / "Tasks"
+                / "LoadBalancing"
+                / "contrastive_model"
+                / "cosine_graph_model.pth"
+        )
+        self.contrastive_model = LbContrastiveGraphModel(self.n_agents, self.device)
+        self.contrastive_model.load_state_dict(torch.load(model_path))
+        self.contrastive_model.eval()
 
     def _perform_checks(self):
         super()._perform_checks()
@@ -133,43 +136,47 @@ class LoadBalancingMlp(Model):
 
     def _forward(self, tensordict: TensorDictBase) -> TensorDictBase:
 
-        current_obs, target = extract_features_from_obs(tensordict.get(self.agent_group)["observation"])
-        batch_size = current_obs.shape[0]
-
+        # ---------------- 1. Global contrastive context ---------- #
         with torch.no_grad():
-            final_emb, h_state_emb, h_object_emb = self.graph_encoder(
-                tensordict.get(self.agent_group)["observation"].view(-1, self.n_agents, 6))
+            final_emb, state_emb, obj_emb = self.contrastive_model(
+                tensordict.get("agent")["observation"].view(-1, self.n_agents,
+                                                            tensordict.get("agent")["observation"].shape[-1]))
 
-        similarity = torch.nn.functional.cosine_similarity(h_state_emb,
-                                                           h_object_emb,
-                                                           dim=-1).unsqueeze(1).repeat(1, self.n_agents, 1)
+        similarity = torch.nn.functional.cosine_similarity(state_emb,
+                                                           obj_emb,
+                                                           dim=-1)
+        context = torch.cat([
+            state_emb,
+            obj_emb,
+            similarity.unsqueeze(1)], dim=-1)
 
-        context_features = torch.cat([
-            h_state_emb.repeat(1, self.n_agents, 1),
-            h_object_emb.repeat(1, self.n_agents, 1),
-            similarity], dim=2).view(batch_size, self.n_agents, -1)
+        # ---------------- 2 Parse observation ---------------- #
 
-        input = torch.cat([tensordict.get(in_key) for in_key in self.in_keys], dim=-1)
+        obs = tensordict["agent"]["observation"]
+        current_status, target_status = extract_features_from_obs(obs)
+        batch_size = current_status.shape[0]
+
+        current_status = current_status[..., 0, :]
+        cur_nodes_f = current_status.reshape(-1, self.n_agents * 2, 1)
+
+        agent_type = torch.zeros((cur_nodes_f.shape[0], self.n_agents, 1), device=self.device)
+        lm_type = torch.ones_like(agent_type)
+
+        cur_types = torch.cat([agent_type, lm_type], dim=1)
+        cur_feats = torch.cat([cur_nodes_f, cur_types], dim=-1)
 
         shape = []
-        for element in tensordict.get(self.agent_group)["observation"].shape:
-            shape.append(element)
+        for i in obs.shape:
+            shape.append(i)
 
-        shape = shape[:-1]
-        shape.append(-1)
-        context = context_features.view(tuple(shape))
-
-        input = torch.cat(
-            [
-                input,
-                context
-            ],
-            dim=-1,
-        )
+        shape[-1] = -1
+        shape[-2] = 1
+        cur_feats = cur_feats.view(tuple(shape))
+        cur_feats = torch.cat([cur_feats, context.view(tuple(shape))], dim=-1)
 
         # Has multi-agent input dimension
         if self.input_has_agent_dim:
-            res = self.mlp.forward(input)
+            res = self.mlp.forward(cur_feats)
             if not self.output_has_agent_dim:
                 # If we are here the module is centralised and parameter shared.
                 # Thus the multi-agent dimension has been expanded,

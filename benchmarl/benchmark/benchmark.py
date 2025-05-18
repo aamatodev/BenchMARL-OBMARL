@@ -77,3 +77,14 @@ class Benchmark:
                 print("\n\nBenchmark was closed gracefully\n\n")
                 experiment.close()
                 raise interrupt
+
+    def eval_sequential(self):
+        """Run all the experiments in the benchmark in a sequence."""
+        for i, experiment in enumerate(self.get_experiments()):
+            print(f"\nRunning experiment {i+1}/{self.n_experiments}.\n")
+            try:
+                experiment.evaluate()
+            except KeyboardInterrupt as interrupt:
+                print("\n\nBenchmark was closed gracefully\n\n")
+                experiment.close()
+                raise interrupt
