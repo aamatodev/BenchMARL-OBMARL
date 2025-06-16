@@ -139,8 +139,6 @@ class SimpleSpreadCriticGnn(Model):
                 ]
             )
 
-
-        print("done")
     def _perform_checks(self):
         super()._perform_checks()
 

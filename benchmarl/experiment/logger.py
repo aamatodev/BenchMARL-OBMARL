@@ -199,6 +199,20 @@ class Logger:
             td.batch_size[0] for td in rollouts
         ) / len(rollouts)
 
+        # log winning steps from infos
+        for group in self.group_map.keys():
+            winning_steps = torch.stack(
+                [
+                    td.get(("next", group, "info", "winning_step")).max()
+                    for td in rollouts
+                ],
+                dim=0,
+            )
+            self._log_min_mean_max(
+                to_log, f"eval/{group}/info/winning_step", winning_steps
+            )
+            json_metrics[group + "_winning_step"] = winning_steps
+
         if self.json_writer is not None:
             self.json_writer.write(
                 metrics=json_metrics,
