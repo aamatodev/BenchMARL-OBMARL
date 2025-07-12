@@ -92,6 +92,7 @@ class VmasTask(Task):
     REVERSE_TRANSPORT = None
     WHEEL = None
     DISPERSION = None
+    DISPERSION_GAG = None
     MULTI_GIVE_WAY = None
     DROPOUT = None
     GIVE_WAY = None
