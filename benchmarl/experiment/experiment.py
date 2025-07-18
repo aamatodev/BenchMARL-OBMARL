@@ -716,8 +716,8 @@ class Experiment(CallbackNotifier):
             # Loop over groups
             training_start = time.time()
             for group in self.train_group_map.keys():
-                group_batch = batch.exclude(*self._get_excluded_keys(group))
-                group_batch = self.algorithm.process_batch(group, group_batch)
+                # group_batch = batch.exclude(*self._get_excluded_keys(group))
+                group_batch = self.algorithm.process_batch(group, batch)
                 if not self.algorithm.has_rnn:
                     group_batch = group_batch.reshape(-1)
 
