@@ -3,7 +3,7 @@
 #  This source code is licensed under the license found in the
 #  LICENSE file in the root directory of this source tree.
 #
-
+from src.environments.magma.common import MagmaTask
 from .common import _get_task_config_class, Task, TaskClass
 
 from .magent.common import MAgentClass, MAgentTask
@@ -14,7 +14,7 @@ from .vmas.common import VmasClass, VmasTask
 
 # The enum classes for the environments available.
 # This is the only object in this file you need to modify when adding a new environment.
-tasks = [VmasTask, Smacv2Task, PettingZooTask, MeltingPotTask, MAgentTask]
+tasks = [VmasTask, Smacv2Task, PettingZooTask, MeltingPotTask, MAgentTask, MagmaTask]
 
 # This is a registry mapping "envname/task_name" to the EnvNameTask.TASK_NAME enum
 # It is used by automatically load task enums from yaml files.
